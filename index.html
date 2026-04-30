@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>台灣 OSM 動態路網導航</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500&family=Barlow+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<style>
+:root{
+  --bg:#060d1a;--surf:#0b1628;--surf2:#101f35;--border:#192c47;
+  --accent:#00d4ff;--acc2:#0099cc;--green:#00e5a0;--amber:#ffb400;
+  --red:#ff4444;--purple:#a78bfa;--text:#cde4f5;--muted:#4a6d99;
+  --mono:'JetBrains Mono',monospace;--sans:'Barlow',sans-serif;--cond:'Barlow Condensed',sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14px;height:100vh;overflow:hidden}
+.layout{display:grid;grid-template-columns:370px 1fr;height:100vh}
+
+/* ── sidebar ── */
+.sidebar{display:flex;flex-direction:column;background:var(--surf);border-right:1px solid var(--border);overflow:hidden}
+.topbar{background:var(--bg);border-bottom:1px solid var(--border);padding:8px 14px;display:flex;align-items:center;gap:8px;flex-shrink:0}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex-shrink:0;transition:.3s}
+.dot.on{background:var(--green);box-shadow:0 0 7px var(--green)}
+.dot.off{background:var(--red)}
+.conn-text{font-family:var(--mono);font-size:11px;color:var(--muted);flex:1}
+.conn-text.on{color:var(--green)}.conn-text.off{color:var(--red)}
+.api-in{background:var(--surf2);border:1px solid var(--border);border-radius:5px;padding:4px 8px;
+  font-family:var(--mono);font-size:11px;color:var(--accent);width:190px;outline:none}
+.api-in:focus{border-color:var(--accent)}
+
+.brand{padding:14px 16px 10px;border-bottom:1px solid var(--border);flex-shrink:0}
+.brand h1{font-family:var(--cond);font-size:20px;font-weight:700;color:var(--accent);letter-spacing:.5px}
+.brand p{font-size:11px;color:var(--muted);margin-top:2px}
+
+.scroll{flex:1;overflow-y:auto;padding:10px}
+.scroll::-webkit-scrollbar{width:3px}
+.scroll::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+
+/* cards */
+.card{background:var(--surf2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px}
+.card-title{font-family:var(--cond);font-size:12px;font-weight:600;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.8px;margin-bottom:10px}
+
+/* stats */
+.sg{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.sb{background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:9px 10px}
+.sb .l{font-size:11px;color:var(--muted);margin-bottom:2px}
+.sb .v{font-family:var(--mono);font-size:16px;font-weight:500;color:var(--text)}
+
+/* forms */
+label{display:block;font-size:12px;color:var(--muted);margin:8px 0 3px}
+label:first-child{margin-top:0}
+input,select,textarea{width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;
+  padding:7px 9px;font-family:var(--sans);font-size:13px;color:var(--text);outline:none;transition:.15s}
+input:focus,select:focus,textarea:focus{border-color:var(--accent)}
+input.bad{border-color:var(--red)!important}
+textarea{resize:vertical;min-height:46px;font-size:12px}
+select option{background:var(--surf2)}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.row4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px}
+
+/* buttons */
+button{border:none;border-radius:6px;padding:8px 12px;font-family:var(--cond);
+  font-size:13px;font-weight:600;cursor:pointer;letter-spacing:.2px;transition:.15s;width:100%}
+.pr{background:var(--accent);color:#000}.pr:hover{background:var(--acc2)}
+.sc{background:var(--border);color:var(--text)}.sc:hover{background:#243550}
+.dn{background:#2a1010;color:var(--red);border:1px solid #4a2020}.dn:hover{background:#3a1515}
+.gn{background:#002e1f;color:var(--green);border:1px solid #004d35}.gn:hover{background:#003d28}
+.am{background:#2a1e00;color:var(--amber);border:1px solid #4a3600}.am:hover{background:#3a2800}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px}
+.g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:8px}
+
+/* mode tabs */
+.mtabs{display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px}
+.mt{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px;
+  text-align:center;cursor:pointer;font-size:12px;color:var(--muted);transition:.15s;user-select:none}
+.mt.on{background:var(--accent);border-color:var(--accent);color:#000;font-weight:600}
+.mt:hover:not(.on){border-color:var(--accent);color:var(--accent)}
+
+/* messages */
+.msg{font-size:12px;margin-top:7px;padding:5px 9px;border-radius:5px;
+  line-height:1.5;font-family:var(--mono);display:none}
+.msg.ok{background:#001f14;color:var(--green);border:1px solid #00402a}
+.msg.err{background:#200000;color:var(--red);border:1px solid #500000}
+.msg.info{background:#001428;color:var(--accent);border:1px solid #003355}
+
+/* result edges list */
+.elist{max-height:180px;overflow-y:auto;margin-top:8px}
+.ei{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px 9px;margin-bottom:5px}
+.ei .n{font-family:var(--mono);font-size:10px;color:var(--accent);margin-bottom:2px}
+.ei .m{font-size:11px;color:var(--muted)}
+
+/* result summary */
+.rg{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:8px}
+.rb{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px;text-align:center}
+.rb .l{font-size:10px;color:var(--muted)}.rb .v{font-family:var(--mono);font-size:14px;color:var(--accent);font-weight:500}
+
+/* events log */
+.evlog{max-height:120px;overflow-y:auto;margin-top:6px}
+.evrow{border-left:2px solid var(--purple);padding:4px 7px;margin-bottom:4px;font-size:11px;color:var(--muted)}
+.evrow span{color:var(--text);font-weight:500}
+
+/* map overlay */
+.minfo{position:absolute;right:12px;top:12px;z-index:500;
+  background:rgba(6,13,26,.92);backdrop-filter:blur(8px);border:1px solid var(--border);
+  border-radius:9px;padding:9px 13px;font-size:12px;color:var(--muted);max-width:210px;line-height:1.6}
+.minfo .hi{color:var(--accent);font-family:var(--mono);font-size:11px}
+.cbadge{position:absolute;left:12px;bottom:20px;z-index:500;
+  background:rgba(6,13,26,.9);border:1px solid var(--border);border-radius:6px;
+  padding:5px 11px;font-family:var(--mono);font-size:11px;color:var(--amber)}
+
+/* loading overlay */
+#loader{display:none;position:fixed;inset:0;background:rgba(6,13,26,.8);z-index:999;
+  align-items:center;justify-content:center;flex-direction:column;gap:14px}
+#loader.show{display:flex}
+.spin{width:40px;height:40px;border:3px solid var(--border);border-top-color:var(--accent);
+  border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.ltxt{font-family:var(--cond);font-size:16px;color:var(--accent)}
+
+@media(max-width:900px){
+  .layout{grid-template-columns:1fr}
+  .sidebar{height:60vh;overflow-y:auto}
+  body{overflow:auto;height:auto}
+  #map{height:40vh!important}
+}
+</style>
+</head>
+<body>
+<div id="loader"><div class="spin"></div><div class="ltxt" id="ltxt">初始化路由引擎...</div></div>
+
+<div class="layout">
+<!-- sidebar -->
+<aside class="sidebar">
+  <div class="topbar">
+    <div class="dot" id="dot"></div>
+    <span class="conn-text" id="ctext">未連線</span>
+    <input class="api-in" id="apiBase" value="http://127.0.0.1:8000" onchange="ping()"/>
+  </div>
+  <div class="brand">
+    <h1>台灣 OSM 動態導航</h1>
+    <p>OSM 全路型路網 · A* 引擎 · 即時天氣/事件疊加</p>
+  </div>
+
+  <div class="scroll">
+    <!-- Stats -->
+    <div class="card">
+      <div class="card-title">路網統計</div>
+      <div class="sg">
+        <div class="sb"><div class="l">OSM 節點</div><div class="v" id="sON">—</div></div>
+        <div class="sb"><div class="l">OSM 邊</div><div class="v" id="sOE">—</div></div>
+        <div class="sb"><div class="l">已載入節點</div><div class="v" id="sGN">—</div></div>
+        <div class="sb"><div class="l">已載入邊</div><div class="v" id="sGE">—</div></div>
+      </div>
+      <div class="g2" style="margin-top:8px">
+        <button class="sc" onclick="fetchStats()">更新統計</button>
+        <button class="sc" onclick="ping()">測試連線</button>
+      </div>
+      <div id="sysMsg" class="msg"></div>
+    </div>
+
+    <!-- Mode -->
+    <div class="card">
+      <div class="card-title">導航模式</div>
+      <div class="mtabs">
+        <div class="mt" id="mf" onclick="setMode('fastest')">⚡ Fastest</div>
+        <div class="mt on" id="mb" onclick="setMode('balanced')">⚖ Balanced</div>
+        <div class="mt" id="ms" onclick="setMode('safest')">🛡 Safest</div>
+      </div>
+    </div>
+
+    <!-- Events -->
+    <div class="card">
+      <div class="card-title">新增事件</div>
+      <div class="row2">
+        <div>
+          <label>類型</label>
+          <select id="evType">
+            <option value="accident">車禍 accident</option>
+            <option value="construction">施工 construction</option>
+            <option value="closure">封閉 closure</option>
+            <option value="congestion">壅塞 congestion</option>
+            <option value="manual">手動 manual</option>
+          </select>
+        </div>
+        <div>
+          <label>嚴重度 (0–1)</label>
+          <input type="number" id="evSev" value="0.7" min="0" max="1" step="0.1"/>
+        </div>
+      </div>
+      <div class="row2">
+        <div><label>緯度</label><input type="number" id="evLat" value="25.0418" step="0.0001" oninput="validateCoord(this,'lat')"/></div>
+        <div><label>經度</label><input type="number" id="evLon" value="121.5365" step="0.0001" oninput="validateCoord(this,'lon')"/></div>
+      </div>
+      <label>影響半徑 (km)</label>
+      <input type="number" id="evRad" value="0.5" min="0.1" max="50" step="0.1"/>
+      <label>限道路類型（選填，空=全部）</label>
+      <select id="evHW">
+        <option value="">全部道路</option>
+        <option value="motorway">motorway 高速</option>
+        <option value="trunk">trunk 快速</option>
+        <option value="primary">primary 主要</option>
+        <option value="secondary">secondary 次要</option>
+        <option value="tertiary">tertiary 三級</option>
+        <option value="residential">residential 住宅</option>
+      </select>
+      <label>描述</label>
+      <textarea id="evDesc">前方事故，請注意行車安全</textarea>
+      <div class="g2">
+        <button class="pr" onclick="addEvent()">新增事件</button>
+        <button class="dn" onclick="clearEvents()">清空所有</button>
+      </div>
+    </div>
+
+    <!-- Weather -->
+    <div class="card">
+      <div class="card-title">新增天氣影響</div>
+      <div class="row2">
+        <div><label>緯度</label><input type="number" id="wxLat" value="25.0418" step="0.0001"/></div>
+        <div><label>經度</label><input type="number" id="wxLon" value="121.5365" step="0.0001"/></div>
+      </div>
+      <label>影響半徑 (km)（天氣通常 20–100km）</label>
+      <input type="number" id="wxRad" value="50" min="1" max="200"/>
+      <div class="row4" style="margin-top:8px">
+        <div><label>雨</label><input type="number" id="wxRain" value="0.6" min="0" max="1" step="0.1"/></div>
+        <div><label>風</label><input type="number" id="wxWind" value="0.3" min="0" max="1" step="0.1"/></div>
+        <div><label>霧</label><input type="number" id="wxVis" value="0.2" min="0" max="1" step="0.1"/></div>
+        <div><label>特報</label><input type="number" id="wxWarn" value="0" min="0" max="1" step="0.1"/></div>
+      </div>
+      <button class="am" style="margin-top:8px" onclick="addWeather()">套用天氣</button>
+    </div>
+
+    <!-- Recompute -->
+    <div class="card">
+      <div class="card-title">套用動態因子</div>
+      <p style="font-size:11px;color:var(--muted);margin-bottom:8px">新增事件/天氣後需執行此步驟，路徑查詢才會反映動態因子（約需 20 秒）</p>
+      <button class="gn" onclick="recompute()">⚡ 重算 dynamic_cost</button>
+      <div id="dynMsg" class="msg"></div>
+    </div>
+
+    <!-- Route query -->
+    <div class="card">
+      <div class="card-title">路徑查詢</div>
+      <div class="row2">
+        <div><label>起點緯度</label><input type="number" id="sLat" value="25.0418" step="0.000001" oninput="validateCoord(this,'lat')"/></div>
+        <div><label>起點經度</label><input type="number" id="sLon" value="121.5365" step="0.000001" oninput="validateCoord(this,'lon')"/></div>
+        <div><label>終點緯度</label><input type="number" id="eLat" value="22.9908" step="0.000001" oninput="validateCoord(this,'lat')"/></div>
+        <div><label>終點經度</label><input type="number" id="eLon" value="120.2133" step="0.000001" oninput="validateCoord(this,'lon')"/></div>
+      </div>
+      <p style="font-size:11px;color:var(--muted);margin-top:5px">💡 點地圖設定起終點（第1下=起點，第2下=終點）</p>
+      <div class="g3">
+        <button class="pr" onclick="queryRoute()">查詢路徑</button>
+        <button class="sc" onclick="dlTxt()">下載分析</button>
+        <button class="sc" onclick="clearRoute()">清除</button>
+      </div>
+      <div id="routeMsg" class="msg"></div>
+    </div>
+
+    <!-- Results -->
+    <div class="card">
+      <div class="card-title">查詢結果</div>
+      <div class="rg">
+        <div class="rb"><div class="l">總距離</div><div class="v" id="rKm">—</div></div>
+        <div class="rb"><div class="l">預估時間</div><div class="v" id="rMin">—</div></div>
+        <div class="rb"><div class="l">路段數</div><div class="v" id="rEdges">—</div></div>
+        <div class="rb"><div class="l">模式</div><div class="v" id="rMode">—</div></div>
+      </div>
+      <div class="elist" id="elist"></div>
+    </div>
+
+    <!-- Events log -->
+    <div class="card">
+      <div class="card-title">動態因子記錄 <span id="evCount" style="color:var(--accent);font-family:var(--mono);font-size:11px;margin-left:6px"></span></div>
+      <div class="evlog" id="evlog"><span style="font-size:11px;color:var(--muted)">尚無記錄</span></div>
+    </div>
+
+    <!-- Raw preview -->
+    <div class="card">
+      <details>
+        <summary style="cursor:pointer;font-size:12px;color:var(--muted);user-select:none">原始回應</summary>
+        <textarea id="rawPrev" readonly style="height:100px;margin-top:6px;font-family:var(--mono);font-size:10px;color:var(--muted)"></textarea>
+      </details>
+    </div>
+  </div>
+</aside>
+
+<!-- map -->
+<main style="position:relative">
+  <div id="map" style="width:100%;height:100vh"></div>
+  <div class="minfo">
+    <div class="hi" id="clickHint">點地圖 → 設定起點</div>
+    <div style="margin-top:3px">OSM 全路型路網，任意道路類型互通。長程走主幹；短程用完整局部圖。</div>
+  </div>
+  <div class="cbadge" id="cbadge">📍 點地圖設定起點</div>
+</main>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<script>
+// ── State
+let mode='balanced', clickPhase='start';
+let startM=null, endM=null, routeL=null, latestRoute=null;
+const evRecords=[];
+
+// ── Map
+const map=L.map('map').setView([23.7,121.0],8);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+  {attribution:'© OpenStreetMap contributors',maxZoom:19}).addTo(map);
+
+const mkIcon=color=>L.divIcon({className:'',iconAnchor:[7,7],
+  html:`<div style="width:14px;height:14px;background:${color};border:2px solid #fff;border-radius:50%;box-shadow:0 0 8px ${color}"></div>`});
+const startIcon=mkIcon('#00e5a0'), endIcon=mkIcon('#ff4444');
+
+map.on('click',e=>{
+  const{lat,lng}=e.latlng;
+  if(clickPhase==='start'){
+    setMarker('start',lat,lng); clickPhase='end';
+    document.getElementById('clickHint').textContent='點地圖 → 設定終點';
+    document.getElementById('cbadge').textContent='📍 點地圖設定終點';
+    document.getElementById('cbadge').style.color='var(--red)';
+  } else {
+    setMarker('end',lat,lng); clickPhase='start';
+    document.getElementById('clickHint').textContent='點地圖 → 設定起點';
+    document.getElementById('cbadge').textContent='📍 點地圖設定起點';
+    document.getElementById('cbadge').style.color='var(--amber)';
+  }
+});
+
+function setMarker(type,lat,lng){
+  if(type==='start'){
+    if(startM) map.removeLayer(startM);
+    startM=L.marker([lat,lng],{icon:startIcon}).bindPopup('起點').addTo(map);
+    document.getElementById('sLat').value=lat.toFixed(6);
+    document.getElementById('sLon').value=lng.toFixed(6);
+  } else {
+    if(endM) map.removeLayer(endM);
+    endM=L.marker([lat,lng],{icon:endIcon}).bindPopup('終點').addTo(map);
+    document.getElementById('eLat').value=lat.toFixed(6);
+    document.getElementById('eLon').value=lng.toFixed(6);
+  }
+}
+
+// ── API
+const api=()=>document.getElementById('apiBase').value.trim().replace(/\/$/,'');
+async function call(path,opts={}){
+  const r=await fetch(api()+path,{headers:{'Content-Type':'application/json'},...opts});
+  const ct=r.headers.get('content-type')||'';
+  const body=ct.includes('json')?await r.json():await r.text();
+  if(!r.ok) throw new Error(typeof body==='string'?`HTTP ${r.status}: ${body}`:(body.detail||`HTTP ${r.status}`));
+  return body;
+}
+function msg(id,text,type='info'){const e=document.getElementById(id);e.textContent=text;e.className=`msg ${type}`;e.style.display='block';}
+function hideMsg(id){document.getElementById(id).style.display='none';}
+function loading(show,text='處理中...'){
+  const l=document.getElementById('loader');
+  l.classList.toggle('show',show);
+  if(show) document.getElementById('ltxt').textContent=text;
+}
+
+// ── Connection
+async function ping(){
+  const dot=document.getElementById('dot'),ct=document.getElementById('ctext');
+  dot.className='dot'; ct.className='conn-text'; ct.textContent='連線中...';
+  try{
+    const d=await call('/stats');
+    dot.className='dot on'; ct.className='conn-text on';
+    ct.textContent=`已連線  GL:${d.graph_loaded?'✓':'✗'}`;
+    updateStats(d);
+    if(!d.graph_loaded) msg('sysMsg','⚠ 後端圖尚未載入，請等待啟動完成','err');
+    else hideMsg('sysMsg');
+  } catch(e){
+    dot.className='dot off'; ct.className='conn-text off'; ct.textContent='無法連線';
+  }
+}
+function updateStats(d){
+  document.getElementById('sON').textContent=(d.osm_nodes||'?').toLocaleString();
+  document.getElementById('sOE').textContent=(d.osm_edges||'?').toLocaleString();
+  document.getElementById('sGN').textContent=(d.graph_nodes||'?').toLocaleString();
+  document.getElementById('sGE').textContent=(d.graph_edges||'?').toLocaleString();
+}
+async function fetchStats(){
+  try{const d=await call('/stats');updateStats(d);msg('sysMsg','統計已更新','ok');}
+  catch(e){msg('sysMsg',e.message,'err');}
+}
+
+// ── Mode
+function setMode(m){
+  mode=m;
+  ['fastest','balanced','safest'].forEach(k=>{
+    document.getElementById('m'+k[0]).classList.toggle('on',k===m);
+  });
+}
+
+// ── Validate
+function validateCoord(el,type){
+  const v=parseFloat(el.value);
+  const ok=type==='lat'?(v>=21.5&&v<=26.5):(v>=118&&v<=122.5);
+  el.classList.toggle('bad',!ok);
+}
+function checkCoords(){
+  const sl=+document.getElementById('sLat').value,so=+document.getElementById('sLon').value;
+  const el=+document.getElementById('eLat').value,eo=+document.getElementById('eLon').value;
+  if(sl<21.5||sl>26.5||so<118||so>122.5){msg('routeMsg','起點座標超出台灣範圍','err');return false;}
+  if(el<21.5||el>26.5||eo<118||eo>122.5){msg('routeMsg','終點座標超出台灣範圍','err');return false;}
+  return true;
+}
+
+// ── Events
+async function addEvent(){
+  const lat=+document.getElementById('evLat').value, lon=+document.getElementById('evLon').value;
+  if(lat<21.5||lat>26.5||lon<118||lon>122.5){msg('dynMsg','事件座標超出台灣範圍','err');return;}
+  const payload={event_type:document.getElementById('evType').value,
+    severity:+document.getElementById('evSev').value,
+    lat,lon,radius_km:+document.getElementById('evRad').value,
+    description:document.getElementById('evDesc').value};
+  const hw=document.getElementById('evHW').value;
+  if(hw) payload.highway=hw;
+  try{
+    const d=await call('/events',{method:'POST',body:JSON.stringify(payload)});
+    evRecords.push({kind:'⚠ '+payload.event_type,text:`${payload.lat.toFixed(3)},${payload.lon.toFixed(3)} r=${payload.radius_km}km sev=${payload.severity}`});
+    renderEvLog();
+    msg('dynMsg',`已新增事件（${d.event_id}）。記得執行「重算 dynamic_cost」！`,'ok');
+    document.getElementById('rawPrev').value=JSON.stringify(d,null,2);
+  }catch(e){msg('dynMsg',e.message,'err');}
+}
+async function clearEvents(){
+  if(!confirm('清空所有事件與天氣？')) return;
+  try{
+    await call('/events',{method:'DELETE'});
+    evRecords.length=0; renderEvLog();
+    msg('dynMsg','已清空，請重算 dynamic_cost','ok');
+  }catch(e){msg('dynMsg',e.message,'err');}
+}
+async function addWeather(){
+  const payload={lat:+document.getElementById('wxLat').value,lon:+document.getElementById('wxLon').value,
+    radius_km:+document.getElementById('wxRad').value,
+    rain_level:+document.getElementById('wxRain').value,
+    wind_level:+document.getElementById('wxWind').value,
+    visibility_level:+document.getElementById('wxVis').value,
+    warning_level:+document.getElementById('wxWarn').value};
+  try{
+    const d=await call('/weather',{method:'POST',body:JSON.stringify(payload)});
+    evRecords.push({kind:'🌧 天氣',text:`r=${payload.radius_km}km 雨${payload.rain_level} 風${payload.wind_level}`});
+    renderEvLog();
+    msg('dynMsg','天氣已新增。記得執行「重算 dynamic_cost」！','ok');
+    document.getElementById('rawPrev').value=JSON.stringify(d,null,2);
+  }catch(e){msg('dynMsg',e.message,'err');}
+}
+async function recompute(){
+  loading(true,'重算 dynamic_cost（約 20 秒）...');
+  msg('dynMsg','重算中...','info');
+  try{
+    const d=await call('/dynamic/recompute',{method:'POST',body:JSON.stringify({mode})});
+    msg('dynMsg',`重算完成（${mode} 模式）。路徑查詢已反映最新因子。`,'ok');
+    document.getElementById('rawPrev').value=JSON.stringify(d,null,2);
+    updateStats(d.stats||{});
+  }catch(e){msg('dynMsg',e.message,'err');}
+  finally{loading(false);}
+}
+function renderEvLog(){
+  const el=document.getElementById('evlog');
+  document.getElementById('evCount').textContent=evRecords.length?`(${evRecords.length})`:'';
+  if(!evRecords.length){el.innerHTML='<span style="font-size:11px;color:var(--muted)">尚無記錄</span>';return;}
+  el.innerHTML=evRecords.slice().reverse().map(r=>
+    `<div class="evrow"><span>${r.kind}</span> ${r.text}</div>`).join('');
+}
+
+// ── Route
+async function queryRoute(){
+  if(!checkCoords()) return;
+  clearRoute(false);
+  msg('routeMsg','A* 搜尋中...（長程可能需要 5–10 秒）','info');
+  loading(true,'A* 路徑搜尋中...');
+  const payload={start_lat:+document.getElementById('sLat').value,
+    start_lon:+document.getElementById('sLon').value,
+    end_lat:+document.getElementById('eLat').value,
+    end_lon:+document.getElementById('eLon').value, mode};
+  try{
+    const d=await call('/route',{method:'POST',body:JSON.stringify(payload)});
+    latestRoute=d;
+    document.getElementById('rawPrev').value=JSON.stringify({ok:d.ok,total_km:d.total_km,total_min:d.total_min,num_edges:d.num_edges,mode:d.mode,start_node:d.start_node,end_node:d.end_node},null,2);
+    renderRouteResult(d);
+    msg('routeMsg',`✓ ${d.total_km.toFixed(2)} km · ${d.total_min.toFixed(0)} 分鐘 · ${d.num_edges} 路段`,'ok');
+  }catch(e){
+    msg('routeMsg',e.message,'err');
+    if(e.message.includes('主幹路網')) msg('routeMsg',e.message+'\n→ 請嘗試更靠近主要道路的座標','err');
+  }
+  finally{loading(false);}
+}
+function renderRouteResult(d){
+  document.getElementById('rKm').textContent=d.total_km?.toFixed(2)+' km';
+  document.getElementById('rMin').textContent=d.total_min?.toFixed(0)+' min';
+  document.getElementById('rEdges').textContent=d.num_edges||'—';
+  document.getElementById('rMode').textContent=d.mode||'—';
+  const list=document.getElementById('elist');
+  // Show highway type groups
+  const hwMap={};
+  (d.edges||[]).forEach(e=>{const hw=e.highway||'other';hwMap[hw]=(hwMap[hw]||0)+1;});
+  const hwSummary=Object.entries(hwMap).sort((a,b)=>b[1]-a[1]).map(([hw,n])=>`${hw}(${n})`).join(' · ');
+  
+  // Build edge list (merge same-name consecutive)
+  const merged=[];
+  let prev=null,km=0,mn=0;
+  (d.edges||[]).forEach(e=>{
+    const nm=e.name||e.highway||'—';
+    if(nm===prev){km+=e.length_km||0;mn+=e.travel_min||0;}
+    else{if(prev) merged.push({nm:prev,km,mn,hw:e.highway});prev=nm;km=e.length_km||0;mn=e.travel_min||0;}
+  });
+  if(prev) merged.push({nm:prev,km,mn});
+  
+  list.innerHTML=`<div style="font-size:10px;color:var(--purple);font-family:var(--mono);margin-bottom:5px">${hwSummary}</div>`
+    +merged.slice(0,40).map((s,i)=>
+    `<div class="ei"><div class="n">${String(i+1).padStart(2,'0')}. ${s.nm}</div>
+    <div class="m">${s.km.toFixed(2)} km · ${s.mn.toFixed(1)} min</div></div>`).join('');
+  
+  if(d.geojson?.features?.length){
+    if(routeL) map.removeLayer(routeL);
+    // Color by highway type
+    routeL=L.geoJSON(d.geojson,{
+      style:f=>{
+        const hw=f.properties?.highway||'';
+        const c={'motorway':'#00d4ff','trunk':'#00e5a0','primary':'#ffb400',
+                  'secondary':'#a78bfa','tertiary':'#6b7280'}[hw]||'#4a6d99';
+        return{color:c,weight:hw.includes('motorway')||hw.includes('trunk')?5:3,opacity:.85};
+      },
+      onEachFeature:(f,layer)=>{
+        const p=f.properties||{};
+        layer.bindPopup(`<b>${p.name||p.highway||'—'}</b><br><span style="color:#666">[${p.highway}] ${(p.length_km||0).toFixed(3)} km · ${(p.speed_kmh||0)} km/h</span>`);
+      }
+    }).addTo(map);
+    const b=routeL.getBounds();
+    if(b.isValid()) map.fitBounds(b.pad(.08));
+  }
+}
+function clearRoute(clearMsg_=true){
+  if(routeL){map.removeLayer(routeL);routeL=null;}
+  latestRoute=null;
+  document.getElementById('elist').innerHTML='';
+  ['rKm','rMin','rEdges','rMode'].forEach(id=>document.getElementById(id).textContent='—');
+  if(clearMsg_) hideMsg('routeMsg');
+}
+function dlTxt(){
+  if(!latestRoute?.analysis_text){msg('routeMsg','請先查詢路徑','err');return;}
+  const a=Object.assign(document.createElement('a'),{
+    href:URL.createObjectURL(new Blob([latestRoute.analysis_text],{type:'text/plain;charset=utf-8'})),
+    download:`route_osm_${new Date().toISOString().replace(/[:.]/g,'-')}.txt`});
+  document.body.appendChild(a);a.click();a.remove();
+  msg('routeMsg','已下載路徑分析報告','ok');
+}
+
+// ── Legend
+function addLegend(){
+  const div=L.control({position:'bottomright'});
+  div.onAdd=()=>{
+    const d=document.createElement('div');
+    d.style.cssText='background:rgba(6,13,26,.88);border:1px solid #192c47;border-radius:8px;padding:8px 12px;font-size:11px;color:#4a6d99;font-family:monospace;line-height:1.8';
+    d.innerHTML=['<b style="color:#cde4f5">道路類型</b>',
+      '<span style="color:#00d4ff">━</span> motorway 高速公路',
+      '<span style="color:#00e5a0">━</span> trunk 快速道路',
+      '<span style="color:#ffb400">━</span> primary 主要道路',
+      '<span style="color:#a78bfa">━</span> secondary 次要道路',
+      '<span style="color:#6b7280">━</span> tertiary 三級/其他'].join('<br>');
+    return d;
+  };
+  div.addTo(map);
+}
+
+// ── Init
+setMarker('start',25.0418,121.5365);
+setMarker('end',22.9908,120.2133);
+addLegend();
+ping();
+setInterval(ping,30000);
+</script>
+</body>
+</html>

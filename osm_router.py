@@ -100,6 +100,7 @@ class OSMRouter:
                 rain_level REAL DEFAULT 0,wind_level REAL DEFAULT 0,
                 visibility_level REAL DEFAULT 0,warning_level REAL DEFAULT 0,
                 is_active INTEGER DEFAULT 1,updated_at TEXT)""")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_edges_latlon ON osm_edges(lat_a, lon_a)")
             conn.commit()
 
     @staticmethod
@@ -238,7 +239,7 @@ class OSMRouter:
                 continue
             for e in graph.get(node, []):
                 nxt = e["to"]
-                ec2 = e["cost"] * w["time"] + e["risk"] * w["risk"] * 60
+                ec2 = e["cost"] * (w["time"] + e["risk"] * w["risk"])
                 if ec2 >= 1e8:
                     continue
                 ng = g + ec2

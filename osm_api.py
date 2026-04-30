@@ -2,31 +2,59 @@
 # -*- coding: utf-8 -*-
 """
 osm_api.py  啟動: uvicorn osm_api:app --host 127.0.0.1 --port 8000
-環境變數: DB_PATH (預設 taiwan_osm.db)
+環境變數: DB_PATH, TDX_CLIENT_ID, TDX_CLIENT_SECRET, CWB_API_KEY, AUTO_SYNC_INTERVAL
 """
 from __future__ import annotations
+import logging
 import os
+import threading
 from contextlib import asynccontextmanager
 from typing import Optional
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from osm_router import OSMRouter, haversine_km
 
+load_dotenv()
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s %(message)s")
+
 DB_PATH = os.getenv("DB_PATH", "taiwan_osm.db")
 _router: Optional[OSMRouter] = None
+_syncer = None
 
 @asynccontextmanager
 async def lifespan(app):
-    global _router
-    print(f"[startup] DB={DB_PATH}")
-    _router = OSMRouter(DB_PATH)
+    global _router, _syncer
+    db = os.getenv("DB_PATH", "taiwan_osm.db")
+    print(f"[startup] DB={db}")
+    _router = OSMRouter(db)
     _router.init_dynamic_schema()
     _router.load_graph(verbose=True)
+
+    interval = int(os.getenv("AUTO_SYNC_INTERVAL", "300"))
+    tdx_id = os.getenv("TDX_CLIENT_ID", "")
+    tdx_secret = os.getenv("TDX_CLIENT_SECRET", "")
+    cwa_key = os.getenv("CWB_API_KEY", "")
+
+    if interval > 0 and (tdx_id or cwa_key):
+        from realtime_sync import RealtimeSyncer, TDXClient, CWAClient
+        tdx = TDXClient(tdx_id, tdx_secret) if tdx_id and tdx_secret else None
+        cwa = CWAClient(cwa_key) if cwa_key else None
+        _syncer = RealtimeSyncer(_router, tdx, cwa, interval=interval)
+        _syncer.start()
+        print(f"[startup] realtime sync started (interval={interval}s)")
+    else:
+        print("[startup] realtime sync disabled (AUTO_SYNC_INTERVAL=0 or no API keys)")
+
     print("[startup] 就緒")
     yield
 
-app = FastAPI(title="Taiwan OSM Dynamic Router", version="2.1.0", lifespan=lifespan)
+    if _syncer:
+        _syncer.stop()
+        print("[shutdown] realtime sync stopped")
+
+app = FastAPI(title="Taiwan OSM Dynamic Router", version="3.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware,allow_origins=["*"],allow_credentials=False,allow_methods=["*"],allow_headers=["*"])
 
 def get_r():
@@ -61,11 +89,29 @@ def chk(lat,lon,name=""):
 
 @app.get("/")
 def root():
-    return {"service":"Taiwan OSM Dynamic Router","version":"2.1.0",
-            "graph_loaded":_router is not None and _router._graph_loaded}
+    return {"service":"Taiwan OSM Dynamic Router","version":"3.0.0",
+            "graph_loaded":_router is not None and _router._graph_loaded,
+            "sync_enabled": _syncer is not None}
 
 @app.get("/stats")
-def stats(): return get_r().stats()
+def stats():
+    s = get_r().stats()
+    if _syncer:
+        s["sync"] = _syncer.status()
+    return s
+
+@app.get("/sync/status")
+def sync_status():
+    if _syncer is None:
+        return {"enabled": False, "message": "Realtime sync not configured"}
+    return {"enabled": True, **_syncer.status()}
+
+@app.post("/sync/trigger")
+def sync_trigger():
+    if _syncer is None:
+        raise HTTPException(400, "Realtime sync not configured")
+    threading.Thread(target=_syncer._run_one_sync, daemon=True).start()
+    return {"ok": True, "message": "Sync triggered"}
 
 @app.get("/nearest")
 def nearest(lat:float,lon:float):

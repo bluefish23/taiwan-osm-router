@@ -140,7 +140,7 @@ button{border:none;border-radius:6px;padding:8px 12px;font-family:var(--cond);
   </div>
   <div class="brand">
     <h1>台灣 OSM 動態導航</h1>
-    <p>OSM 全路型路網 · A* 引擎 · 即時天氣/事件疊加</p>
+    <p>OSM 全路型路網 · A* 引擎 · TDX/CWA 即時資料同步</p>
   </div>
 
   <div class="scroll">
@@ -158,6 +158,26 @@ button{border:none;border-radius:6px;padding:8px 12px;font-family:var(--cond);
         <button class="sc" onclick="ping()">測試連線</button>
       </div>
       <div id="sysMsg" class="msg"></div>
+    </div>
+
+    <!-- Sync Status -->
+    <div class="card" id="syncCard" style="display:none">
+      <div class="card-title">即時資料同步
+        <span id="syncDot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted);margin-left:6px;vertical-align:middle"></span>
+      </div>
+      <div class="sg">
+        <div class="sb"><div class="l">上次同步</div><div class="v" id="syncTime">—</div></div>
+        <div class="sb"><div class="l">狀態</div><div class="v" id="syncOk">—</div></div>
+        <div class="sb"><div class="l">車速偵測</div><div class="v" id="syncSpeed">—</div></div>
+        <div class="sb"><div class="l">路況事件</div><div class="v" id="syncInc">—</div></div>
+        <div class="sb"><div class="l">氣象站</div><div class="v" id="syncWx">—</div></div>
+        <div class="sb"><div class="l">下次同步</div><div class="v" id="syncNext">—</div></div>
+      </div>
+      <div class="g2" style="margin-top:8px">
+        <button class="am" onclick="triggerSync()">手動同步</button>
+        <button class="sc" onclick="fetchSyncStatus()">更新狀態</button>
+      </div>
+      <div id="syncMsg" class="msg"></div>
     </div>
 
     <!-- Mode -->
@@ -566,12 +586,50 @@ function addLegend(){
   div.addTo(map);
 }
 
+// ── Sync Status
+async function fetchSyncStatus(){
+  try{
+    const d=await call('/sync/status');
+    const card=document.getElementById('syncCard');
+    if(!d.enabled){card.style.display='none';return;}
+    card.style.display='block';
+    const dot=document.getElementById('syncDot');
+    dot.style.background=d.last_sync_ok?'var(--green)':d.last_sync_ok===false?'var(--red)':'var(--muted)';
+    const okEl=document.getElementById('syncOk');
+    okEl.textContent=d.last_sync_ok?'OK':d.last_sync_ok===false?'Error':'—';
+    okEl.style.color=d.last_sync_ok?'var(--green)':d.last_sync_ok===false?'var(--red)':'var(--muted)';
+    document.getElementById('syncSpeed').textContent=d.tdx_speed_count??'—';
+    document.getElementById('syncInc').textContent=d.tdx_incident_count??'—';
+    document.getElementById('syncWx').textContent=d.cwa_station_count??'—';
+    if(d.last_sync_time){
+      const t=new Date(d.last_sync_time);
+      document.getElementById('syncTime').textContent=t.toLocaleTimeString('zh-TW');
+    }
+    if(d.next_sync_time){
+      const t=new Date(d.next_sync_time);
+      document.getElementById('syncNext').textContent=t.toLocaleTimeString('zh-TW');
+    }
+    if(d.last_error) msg('syncMsg',d.last_error,'err');
+    else hideMsg('syncMsg');
+  }catch(e){/* sync not available */}
+}
+async function triggerSync(){
+  try{
+    msg('syncMsg','同步中...','info');
+    await call('/sync/trigger',{method:'POST'});
+    msg('syncMsg','已觸發同步，稍後更新狀態','ok');
+    setTimeout(fetchSyncStatus,5000);
+  }catch(e){msg('syncMsg',e.message,'err');}
+}
+
 // ── Init
 setMarker('start',25.0418,121.5365);
 setMarker('end',22.9908,120.2133);
 addLegend();
 ping();
+fetchSyncStatus();
 setInterval(ping,30000);
+setInterval(fetchSyncStatus,30000);
 </script>
 </body>
 </html>

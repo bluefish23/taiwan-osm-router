@@ -110,6 +110,13 @@ button{border:none;border-radius:6px;padding:8px 12px;font-family:var(--cond);
   background:rgba(6,13,26,.9);border:1px solid var(--border);border-radius:6px;
   padding:5px 11px;font-family:var(--mono);font-size:11px;color:var(--amber)}
 
+/* overlay toggles */
+.otoggle{display:flex;align-items:center;gap:8px;padding:6px 0;cursor:pointer;user-select:none}
+.otoggle .odot{width:12px;height:12px;border-radius:3px;flex-shrink:0;border:1px solid rgba(255,255,255,.2)}
+.otoggle .olbl{font-size:12px;color:var(--muted);flex:1}
+.otoggle .ocnt{font-family:var(--mono);font-size:11px;color:var(--accent)}
+.otoggle.on .olbl{color:var(--text)}
+
 /* loading overlay */
 #loader{display:none;position:fixed;inset:0;background:rgba(6,13,26,.8);z-index:999;
   align-items:center;justify-content:center;flex-direction:column;gap:14px}
@@ -178,6 +185,30 @@ button{border:none;border-radius:6px;padding:8px 12px;font-family:var(--cond);
         <button class="sc" onclick="fetchSyncStatus()">更新狀態</button>
       </div>
       <div id="syncMsg" class="msg"></div>
+    </div>
+
+    <!-- Overlay layers -->
+    <div class="card">
+      <div class="card-title">即時圖層</div>
+      <div class="otoggle on" onclick="toggleLayer('congestion')">
+        <div class="odot" style="background:#ff4444"></div>
+        <div class="olbl">車速壅塞</div>
+        <div class="ocnt" id="olCong">—</div>
+      </div>
+      <div class="otoggle on" onclick="toggleLayer('events')">
+        <div class="odot" style="background:#ffb400"></div>
+        <div class="olbl">交通事件</div>
+        <div class="ocnt" id="olEvt">—</div>
+      </div>
+      <div class="otoggle on" onclick="toggleLayer('weather')">
+        <div class="odot" style="background:#4a9eff"></div>
+        <div class="olbl">天氣影響</div>
+        <div class="ocnt" id="olWx">—</div>
+      </div>
+      <div class="g2" style="margin-top:6px">
+        <button class="pr" onclick="loadOverlays()">載入圖層</button>
+        <button class="sc" onclick="clearOverlays()">清除圖層</button>
+      </div>
     </div>
 
     <!-- Mode -->
@@ -631,14 +662,99 @@ async function triggerSync(){
   }catch(e){msg('syncMsg',e.message,'err');}
 }
 
+// ── Overlay Layers
+const overlayState={congestion:true,events:true,weather:true};
+const overlayGroups={congestion:L.layerGroup().addTo(map),events:L.layerGroup().addTo(map),weather:L.layerGroup().addTo(map)};
+
+function toggleLayer(name){
+  overlayState[name]=!overlayState[name];
+  const el=event.currentTarget;
+  el.classList.toggle('on',overlayState[name]);
+  if(overlayState[name]) map.addLayer(overlayGroups[name]);
+  else map.removeLayer(overlayGroups[name]);
+}
+
+function sevColor(sev){
+  if(sev>=0.8) return '#ff2222';
+  if(sev>=0.6) return '#ff6600';
+  if(sev>=0.4) return '#ffaa00';
+  if(sev>=0.2) return '#ffdd00';
+  return '#88cc00';
+}
+
+const evtColors={accident:'#ff4444',construction:'#ffb400',closure:'#cc0000',congestion:'#ff6600',manual:'#a78bfa'};
+
+async function loadOverlays(){
+  try{
+    const [events,weather]=await Promise.all([call('/events'),call('/weather')]);
+    overlayGroups.congestion.clearLayers();
+    overlayGroups.events.clearLayers();
+    overlayGroups.weather.clearLayers();
+    let cCong=0,cEvt=0;
+
+    for(const ev of events){
+      const lat=+ev.lat,lon=+ev.lon,sev=+ev.severity||0.5,rad=(+ev.radius_km||0.5)*1000;
+      if(!lat||!lon) continue;
+      const src=ev.source||'manual';
+      const typ=ev.event_type||'manual';
+
+      if(typ==='congestion'&&src==='realtime'){
+        cCong++;
+        L.circleMarker([lat,lon],{radius:5,fillColor:sevColor(sev),color:'rgba(0,0,0,.3)',weight:1,fillOpacity:0.8})
+          .bindPopup(`<b>壅塞</b> severity=${sev.toFixed(2)}<br><span style="color:#888">${ev.description||''}</span>`)
+          .addTo(overlayGroups.congestion);
+      } else {
+        cEvt++;
+        const col=evtColors[typ]||'#a78bfa';
+        L.circle([lat,lon],{radius:rad,fillColor:col,color:col,weight:2,fillOpacity:0.2,opacity:0.6})
+          .bindPopup(`<b>${typ}</b> sev=${sev.toFixed(2)}<br>r=${(rad/1000).toFixed(1)}km<br><span style="color:#888">${ev.description||''}</span>`)
+          .addTo(overlayGroups.events);
+        L.circleMarker([lat,lon],{radius:6,fillColor:col,color:'#fff',weight:2,fillOpacity:0.9})
+          .addTo(overlayGroups.events);
+      }
+    }
+
+    let cWx=0;
+    for(const wx of weather){
+      const lat=+wx.lat,lon=+wx.lon,rad=(+wx.radius_km||30)*1000;
+      const rain=+wx.rain_level||0,wind=+wx.wind_level||0,vis=+wx.visibility_level||0;
+      const maxLvl=Math.max(rain,wind,vis);
+      if(maxLvl<0.01) continue;
+      cWx++;
+      let col='#4a9eff',label='';
+      if(rain>=wind&&rain>=vis){col='#2288ff';label=`雨=${rain.toFixed(2)}`;}
+      else if(wind>=vis){col='#44bb88';label=`風=${wind.toFixed(2)}`;}
+      else{col='#888888';label=`霧=${vis.toFixed(2)}`;}
+      L.circle([lat,lon],{radius:rad,fillColor:col,color:col,weight:1,fillOpacity:Math.min(0.15,maxLvl*0.2),opacity:0.3})
+        .bindPopup(`<b>天氣</b><br>雨=${rain.toFixed(2)} 風=${wind.toFixed(2)} 霧=${vis.toFixed(2)}<br>半徑=${(rad/1000).toFixed(0)}km`)
+        .addTo(overlayGroups.weather);
+    }
+
+    document.getElementById('olCong').textContent=cCong;
+    document.getElementById('olEvt').textContent=cEvt;
+    document.getElementById('olWx').textContent=cWx;
+  }catch(e){console.error('loadOverlays',e);}
+}
+
+function clearOverlays(){
+  overlayGroups.congestion.clearLayers();
+  overlayGroups.events.clearLayers();
+  overlayGroups.weather.clearLayers();
+  document.getElementById('olCong').textContent='—';
+  document.getElementById('olEvt').textContent='—';
+  document.getElementById('olWx').textContent='—';
+}
+
 // ── Init
 setMarker('start',25.0418,121.5365);
 setMarker('end',22.9908,120.2133);
 addLegend();
 ping();
 fetchSyncStatus();
+loadOverlays();
 setInterval(ping,30000);
 setInterval(fetchSyncStatus,30000);
+setInterval(loadOverlays,60000);
 </script>
 </body>
 </html>

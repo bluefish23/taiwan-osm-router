@@ -137,6 +137,14 @@ def del_event(event_id:str):
 def clear_events():
     get_r().clear_events(); return {"ok":True}
 
+@app.get("/weather")
+def list_weather():
+    try:
+        with __import__('sqlite3').connect(get_r().db_path,timeout=10) as conn:
+            conn.row_factory = __import__('sqlite3').Row
+            return [dict(r) for r in conn.execute("SELECT * FROM dynamic_weather WHERE is_active=1").fetchall()]
+    except: return []
+
 @app.post("/weather")
 def add_weather(req:WeatherReq):
     chk(req.lat,req.lon,"天氣")

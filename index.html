@@ -263,10 +263,10 @@ button{border:none;border-radius:6px;padding:8px 12px;font-family:var(--cond);
     <div class="card">
       <div class="card-title">路徑查詢</div>
       <div class="row2">
-        <div><label>起點緯度</label><input type="number" id="sLat" value="25.0418" step="0.000001" oninput="validateCoord(this,'lat')"/></div>
-        <div><label>起點經度</label><input type="number" id="sLon" value="121.5365" step="0.000001" oninput="validateCoord(this,'lon')"/></div>
-        <div><label>終點緯度</label><input type="number" id="eLat" value="22.9908" step="0.000001" oninput="validateCoord(this,'lat')"/></div>
-        <div><label>終點經度</label><input type="number" id="eLon" value="120.2133" step="0.000001" oninput="validateCoord(this,'lon')"/></div>
+        <div><label>起點緯度</label><input type="number" id="sLat" value="25.0418" step="0.000001" oninput="validateCoord(this,'lat')" onchange="updateMarkerFromInput('start')"/></div>
+        <div><label>起點經度</label><input type="number" id="sLon" value="121.5365" step="0.000001" oninput="validateCoord(this,'lon')" onchange="updateMarkerFromInput('start')"/></div>
+        <div><label>終點緯度</label><input type="number" id="eLat" value="22.9908" step="0.000001" oninput="validateCoord(this,'lat')" onchange="updateMarkerFromInput('end')"/></div>
+        <div><label>終點經度</label><input type="number" id="eLon" value="120.2133" step="0.000001" oninput="validateCoord(this,'lon')" onchange="updateMarkerFromInput('end')"/></div>
       </div>
       <p style="font-size:11px;color:var(--muted);margin-top:5px">💡 點地圖設定起終點（第1下=起點，第2下=終點）</p>
       <div class="g3">
@@ -417,6 +417,15 @@ function validateCoord(el,type){
   const v=parseFloat(el.value);
   const ok=type==='lat'?(v>=21.5&&v<=26.5):(v>=118&&v<=122.5);
   el.classList.toggle('bad',!ok);
+}
+function updateMarkerFromInput(type){
+  if(type==='start'){
+    const lat=+document.getElementById('sLat').value, lon=+document.getElementById('sLon').value;
+    if(lat>=21.5&&lat<=26.5&&lon>=118&&lon<=122.5) setMarker('start',lat,lon);
+  } else {
+    const lat=+document.getElementById('eLat').value, lon=+document.getElementById('eLon').value;
+    if(lat>=21.5&&lat<=26.5&&lon>=118&&lon<=122.5) setMarker('end',lat,lon);
+  }
 }
 function checkCoords(){
   const sl=+document.getElementById('sLat').value,so=+document.getElementById('sLon').value;

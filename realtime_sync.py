@@ -31,6 +31,7 @@ TDX_VD_CITIES = [
     "PingtungCounty", "YilanCounty", "HualienCounty",
     "TaitungCounty", "NantouCounty",
 ]
+TDX_REQUEST_DELAY = 1.5
 TDX_VD_STATIC_TPL = "/api/basic/v2/Road/Traffic/VD/City/{city}"
 TDX_VD_LIVE_TPL = "/api/basic/v2/Road/Traffic/Live/VD/City/{city}"
 
@@ -59,7 +60,7 @@ def _utc_now():
 
 
 def _conn(db_path):
-    c = sqlite3.connect(db_path, check_same_thread=False)
+    c = sqlite3.connect(db_path, timeout=30, check_same_thread=False)
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA journal_mode=WAL")
     return c
@@ -98,22 +99,27 @@ class TDXClient:
             return None
         url = f"{TDX_BASE}{path}"
         params = {"$format": "JSON"}
-        try:
-            resp = self._session.get(url, headers={
-                "Authorization": f"Bearer {self._token}",
-                "Accept-Encoding": "gzip",
-            }, params=params, timeout=(10, 30))
-            if resp.status_code == 401:
-                self._token_expiry = 0
-                self._ensure_token()
-                resp = self._session.get(url, headers={
-                    "Authorization": f"Bearer {self._token}",
-                }, params=params, timeout=(10, 30))
-            resp.raise_for_status()
-            return resp.json()
-        except Exception as e:
-            logger.error("TDX GET %s failed: %s", path, e)
-            return None
+        headers = {"Authorization": f"Bearer {self._token}", "Accept-Encoding": "gzip"}
+        for attempt in range(3):
+            try:
+                resp = self._session.get(url, headers=headers, params=params, timeout=(10, 30))
+                if resp.status_code == 401:
+                    self._token_expiry = 0
+                    self._ensure_token()
+                    headers["Authorization"] = f"Bearer {self._token}"
+                    continue
+                if resp.status_code == 429:
+                    wait = min(30, TDX_REQUEST_DELAY * (2 ** attempt))
+                    logger.warning("TDX 429 on %s, waiting %.1fs (attempt %d)", path, wait, attempt + 1)
+                    time.sleep(wait)
+                    continue
+                resp.raise_for_status()
+                return resp.json()
+            except Exception as e:
+                logger.error("TDX GET %s failed: %s", path, e)
+                return None
+        logger.error("TDX GET %s failed after 3 attempts (rate limited)", path)
+        return None
 
 
 class CWAClient:
@@ -143,6 +149,9 @@ def _ensure_source_columns(db_path: str):
             cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
             if "source" not in cols:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN source TEXT DEFAULT 'manual'")
+        conn.execute("""CREATE TABLE IF NOT EXISTS vd_positions(
+            vd_id TEXT PRIMARY KEY, lat REAL, lon REAL, road_class INTEGER,
+            city TEXT, updated_at TEXT)""")
         conn.commit()
 
 
@@ -270,10 +279,21 @@ class RealtimeSyncer:
     def _load_vd_positions(self):
         if self._vd_positions:
             return
+        with _conn(self.router.db_path) as conn:
+            cached = conn.execute("SELECT vd_id, lat, lon, road_class FROM vd_positions").fetchall()
+            if cached:
+                for r in cached:
+                    self._vd_positions[r["vd_id"]] = (float(r["lat"]), float(r["lon"]), int(r["road_class"]))
+                logger.info("Loaded %d VD positions from cache", len(self._vd_positions))
+                return
+
         total = 0
+        db_rows = []
+        now = _utc_now()
         for city in TDX_VD_CITIES:
             data = self.tdx.get(TDX_VD_STATIC_TPL.format(city=city))
             if data is None:
+                time.sleep(TDX_REQUEST_DELAY)
                 continue
             for vd in data.get("VDs", []):
                 vid = vd.get("VDID")
@@ -285,10 +305,18 @@ class RealtimeSyncer:
                         lat, lon = float(lat), float(lon)
                         if 21.5 <= lat <= 26.5 and 118 <= lon <= 122.5:
                             self._vd_positions[vid] = (lat, lon, int(rc))
+                            db_rows.append((vid, lat, lon, int(rc), city, now))
                             total += 1
                     except (ValueError, TypeError):
                         pass
-        logger.info("Loaded %d VD positions from %d cities", total, len(TDX_VD_CITIES))
+            time.sleep(TDX_REQUEST_DELAY)
+
+        if db_rows:
+            with _conn(self.router.db_path) as conn:
+                conn.executemany(
+                    "INSERT OR REPLACE INTO vd_positions VALUES(?,?,?,?,?,?)", db_rows)
+                conn.commit()
+        logger.info("Fetched %d VD positions from %d cities (cached to DB)", total, len(TDX_VD_CITIES))
 
     def sync_traffic_speed(self) -> int:
         self._load_vd_positions()
@@ -300,6 +328,7 @@ class RealtimeSyncer:
         for city in TDX_VD_CITIES:
             data = self.tdx.get(TDX_VD_LIVE_TPL.format(city=city))
             if data is None:
+                time.sleep(TDX_REQUEST_DELAY)
                 continue
             for vd in data.get("VDLives", []):
                 vid = vd.get("VDID")
@@ -314,6 +343,7 @@ class RealtimeSyncer:
                     continue
                 severity = min(1.0, max(0.0, 1.0 - speed / free_speed))
                 candidates.append((severity, vid, lat, lon, speed, free_speed))
+            time.sleep(TDX_REQUEST_DELAY)
 
         candidates.sort(reverse=True)
         now = _utc_now()

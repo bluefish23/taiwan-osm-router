@@ -7,6 +7,7 @@ realtime_sync.py — TDX 即時車速/路況 + CWA 氣象資料同步引擎
 """
 from __future__ import annotations
 
+import gc
 import logging
 import sqlite3
 import threading
@@ -266,6 +267,7 @@ class RealtimeSyncer:
                 "tdx_incident_count": counts["incident"],
                 "cwa_station_count": counts["weather"],
             })
+        gc.collect()
         logger.info("Sync done in %.1fs: speed=%d incident=%d weather=%d errors=%d",
                      elapsed, counts["speed"], counts["incident"], counts["weather"], len(errors))
 

@@ -13,6 +13,7 @@ osm_router.py — 台灣 OSM 動態路由引擎
 from __future__ import annotations
 
 import collections
+import gc
 import heapq
 import itertools
 import math
@@ -124,9 +125,10 @@ class OSMRouter:
     def load_graph(self, verbose=True) -> int:
         import time; t0=time.time()
         if verbose: print("載入主幹路網...",flush=True)
+        self._graph = collections.defaultdict(list)
+        self._ncoords = {}
+        gc.collect()
         hw_ph=",".join("?"*len(MAJOR_HW))
-        graph = collections.defaultdict(list)
-        ncoords = {}
         edge_count = 0
         with _conn(self.db_path) as conn:
             cur=conn.execute(f"""SELECT from_node,to_node,edge_id,highway,name,
@@ -139,18 +141,18 @@ class OSMRouter:
                 edge_count += 1
                 if int(r["closed"] or 0): continue
                 fn, tn, la, loa, lb, lob, rec = self._build_edge(r)
-                graph[fn].append(rec)
-                ncoords[fn] = (la, loa); ncoords[tn] = (lb, lob)
+                self._graph[fn].append(rec)
+                self._ncoords[fn] = (la, loa); self._ncoords[tn] = (lb, lob)
 
-        self._graph = graph
-        self._ncoords = ncoords; self._graph_loaded = True
+        self._graph_loaded = True
+        gc.collect()
         import threading
         def _count():
             with _conn(self.db_path) as conn:
                 self._osm_node_count=conn.execute("SELECT COUNT(*) FROM osm_nodes").fetchone()[0]
                 self._osm_edge_count=conn.execute("SELECT COUNT(*) FROM osm_edges").fetchone()[0]
         threading.Thread(target=_count, daemon=True).start()
-        if verbose: print(f"  {len(graph):,} 節點，{edge_count:,} 邊  ({time.time()-t0:.1f}s)",flush=True)
+        if verbose: print(f"  {len(self._graph):,} 節點，{edge_count:,} 邊  ({time.time()-t0:.1f}s)",flush=True)
         return edge_count
 
     def _load_local_graph(self, bbox, pad=0.025):

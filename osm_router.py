@@ -86,6 +86,8 @@ class OSMRouter:
         self._graph: Dict[int,List[dict]] = {}
         self._ncoords: Dict[int,Tuple[float,float]] = {}
         self._graph_loaded = False
+        self._graph_node_count = 0
+        self._graph_edge_count = 0
         self._osm_node_count = 0
         self._osm_edge_count = 0
 
@@ -125,10 +127,10 @@ class OSMRouter:
     def load_graph(self, verbose=True) -> int:
         import time; t0=time.time()
         if verbose: print("載入主幹路網...",flush=True)
-        self._graph = collections.defaultdict(list)
-        self._ncoords = {}
         gc.collect()
         hw_ph=",".join("?"*len(MAJOR_HW))
+        graph = collections.defaultdict(list)
+        ncoords = {}
         edge_count = 0
         with _conn(self.db_path) as conn:
             cur=conn.execute(f"""SELECT from_node,to_node,edge_id,highway,name,
@@ -141,11 +143,11 @@ class OSMRouter:
                 edge_count += 1
                 if int(r["closed"] or 0): continue
                 fn, tn, la, loa, lb, lob, rec = self._build_edge(r)
-                self._graph[fn].append(rec)
-                self._ncoords[fn] = (la, loa); self._ncoords[tn] = (lb, lob)
+                graph[fn].append(rec)
+                ncoords[fn] = (la, loa); ncoords[tn] = (lb, lob)
 
         adj: dict[int, set[int]] = {}
-        for fn, edges in self._graph.items():
+        for fn, edges in graph.items():
             if fn not in adj: adj[fn] = set()
             for e in edges:
                 adj[fn].add(e.to)
@@ -167,15 +169,19 @@ class OSMRouter:
             if len(cc) > len(best_cc): best_cc = cc
         del adj, visited
         removed = 0
-        for fn in list(self._graph.keys()):
+        for fn in list(graph.keys()):
             if fn not in best_cc:
-                del self._graph[fn]
+                del graph[fn]
                 removed += 1
-        self._ncoords = {k: v for k, v in self._ncoords.items() if k in best_cc}
-        kept_edges = sum(len(v) for v in self._graph.values())
+        ncoords = {k: v for k, v in ncoords.items() if k in best_cc}
+        kept_edges = sum(len(v) for v in graph.values())
         if verbose and removed:
-            print(f"  連通分量過濾：移除 {removed:,} 孤立節點，保留 {len(self._graph):,} 節點 {kept_edges:,} 邊", flush=True)
+            print(f"  連通分量過濾：移除 {removed:,} 孤立節點，保留 {len(graph):,} 節點 {kept_edges:,} 邊", flush=True)
 
+        self._graph = graph
+        self._ncoords = ncoords
+        self._graph_node_count = len(graph)
+        self._graph_edge_count = kept_edges
         self._graph_loaded = True
         gc.collect()
         import threading
@@ -184,7 +190,7 @@ class OSMRouter:
                 self._osm_node_count=conn.execute("SELECT COUNT(*) FROM osm_nodes").fetchone()[0]
                 self._osm_edge_count=conn.execute("SELECT COUNT(*) FROM osm_edges").fetchone()[0]
         threading.Thread(target=_count, daemon=True).start()
-        if verbose: print(f"  {len(self._graph):,} 節點，{kept_edges:,} 邊  ({time.time()-t0:.1f}s)",flush=True)
+        if verbose: print(f"  {len(graph):,} 節點，{kept_edges:,} 邊  ({time.time()-t0:.1f}s)",flush=True)
         return kept_edges
 
     def _load_local_graph(self, bbox, pad=0.025):
@@ -365,8 +371,8 @@ class OSMRouter:
 
     def stats(self):
         s={"db_path":self.db_path,"graph_loaded":self._graph_loaded,
-           "graph_nodes":len(self._graph),
-           "graph_edges":sum(len(v) for v in self._graph.values()),
+           "graph_nodes":self._graph_node_count,
+           "graph_edges":self._graph_edge_count,
            "osm_nodes":self._osm_node_count,
            "osm_edges":self._osm_edge_count}
         with _conn(self.db_path) as conn:

@@ -144,6 +144,38 @@ class OSMRouter:
                 self._graph[fn].append(rec)
                 self._ncoords[fn] = (la, loa); self._ncoords[tn] = (lb, lob)
 
+        adj: dict[int, set[int]] = {}
+        for fn, edges in self._graph.items():
+            if fn not in adj: adj[fn] = set()
+            for e in edges:
+                adj[fn].add(e.to)
+                if e.to not in adj: adj[e.to] = set()
+                adj[e.to].add(fn)
+        best_cc: set[int] = set()
+        visited: set[int] = set()
+        for seed in adj:
+            if seed in visited: continue
+            queue = collections.deque([seed])
+            cc: set[int] = set()
+            while queue:
+                n = queue.popleft()
+                if n in cc: continue
+                cc.add(n)
+                for nb in adj.get(n, ()):
+                    if nb not in cc: queue.append(nb)
+            visited |= cc
+            if len(cc) > len(best_cc): best_cc = cc
+        del adj, visited
+        removed = 0
+        for fn in list(self._graph.keys()):
+            if fn not in best_cc:
+                del self._graph[fn]
+                removed += 1
+        self._ncoords = {k: v for k, v in self._ncoords.items() if k in best_cc}
+        kept_edges = sum(len(v) for v in self._graph.values())
+        if verbose and removed:
+            print(f"  連通分量過濾：移除 {removed:,} 孤立節點，保留 {len(self._graph):,} 節點 {kept_edges:,} 邊", flush=True)
+
         self._graph_loaded = True
         gc.collect()
         import threading
@@ -152,8 +184,8 @@ class OSMRouter:
                 self._osm_node_count=conn.execute("SELECT COUNT(*) FROM osm_nodes").fetchone()[0]
                 self._osm_edge_count=conn.execute("SELECT COUNT(*) FROM osm_edges").fetchone()[0]
         threading.Thread(target=_count, daemon=True).start()
-        if verbose: print(f"  {len(self._graph):,} 節點，{edge_count:,} 邊  ({time.time()-t0:.1f}s)",flush=True)
-        return edge_count
+        if verbose: print(f"  {len(self._graph):,} 節點，{kept_edges:,} 邊  ({time.time()-t0:.1f}s)",flush=True)
+        return kept_edges
 
     def _load_local_graph(self, bbox, pad=0.025):
         min_lat, min_lon, max_lat, max_lon = bbox
@@ -219,8 +251,13 @@ class OSMRouter:
         heap = [(h(start_node), next(_CTR), start_node, 0.0)]
         best = {start_node: 0.0}
         came_from: dict = {}
+        max_iters = min(len(graph) * 3, 2_000_000)
+        iters = 0
 
         while heap:
+            iters += 1
+            if iters > max_iters:
+                raise ValueError(f"路徑搜尋超時（{iters} 步），請縮短距離或改用不同模式。")
             f, _, node, g = heapq.heappop(heap)
             if node == end_node:
                 edges = []

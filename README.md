@@ -1,133 +1,148 @@
-# 台灣 OSM 動態路網導航系統 v2
+# Taiwan OSM Dynamic Routing System
 
-## 架構
+Live: **https://taiwan-osm-router.fly.dev/app**
+
+Real-time navigation system for Taiwan built on OpenStreetMap data, integrating TDX traffic data (vehicle speed detection, incident reports) and CWA weather data (weather stations, rainfall) for dynamic route planning via A* algorithm.
+
+## Features
+
+- **A* routing engine** with 811K nodes / 1.38M pre-loaded edges (motorway-tertiary)
+- **Three routing modes**: fastest / balanced / safest
+- **Real-time data integration**: TDX traffic speed, incidents, CWA weather — auto-synced every 5 minutes
+- **Dynamic cost adjustment**: congestion, accidents, construction, closures, rain, wind, visibility
+- **Address/landmark search**: hybrid geocoding via TGOS + Nominatim
+- **GPS positioning**: browser geolocation with live tracking
+- **Overlay visualization**: congestion heatmap, incident markers, weather circles
+- **Separate user/admin interfaces**: navigation app + management dashboard
+
+## Architecture
 
 ```
-build_osm_graph.py   OSM PBF → SQLite（osm_nodes + osm_edges）
-osm_router.py        A* 路由引擎（主幹預載 + 短程局部圖）
-osm_api.py           FastAPI 後端（啟動時自動預載路網圖）
-index.html           前端地圖介面（直接開啟即可使用）
+index.html  ──►  osm_api.py  ──►  osm_router.py
+(Navigation)     (FastAPI)        (A* Engine)
+admin.html  ──┘       │
+                       ├──►  realtime_sync.py  ──►  TDX API + CWA API
+                       └──►  taiwan_osm.db (SQLite)
 ```
 
-## 為何改用 OSM PBF？
+## File Structure
 
-| 舊系統（CSV interchange）| 新系統（OSM PBF）|
-|---|---|
-| 只有交流道節點，路網稀疏 | 全台 376 萬節點、764 萬邊 |
-| 跨路型需人工 connector | OSM node_id 天然交叉，自動互通 |
-| 找不到一般道路 | 所有可駕駛道路類型完整收錄 |
-| 無真實路名 | 完整路名（中英文）|
+| File | Purpose |
+|------|---------|
+| `osm_router.py` | A* path search engine + dynamic cost calculation |
+| `osm_api.py` | FastAPI REST API server (15 endpoints) |
+| `realtime_sync.py` | TDX/CWA background sync engine |
+| `index.html` | User navigation UI (full-screen map + floating panels) |
+| `admin.html` | Admin dashboard (network stats, event/weather management) |
+| `build_osm_graph.py` | OSM PBF → SQLite graph builder (run once) |
+| `Dockerfile` | Container image for deployment |
+| `fly.toml` | Fly.io deployment configuration |
+| `start.sh` | Entrypoint: DB validation + auto PBF download/build + uvicorn |
 
----
+## Deployment (Fly.io)
 
-## 快速啟動
+The app runs on Fly.io with a persistent volume for the SQLite database.
 
-### 1. 安裝依賴
 ```bash
-pip install fastapi uvicorn
+# First-time setup
+fly launch --no-deploy
+fly volumes create osm_data --size 5 --region nrt
+fly secrets set TDX_CLIENT_ID=xxx TDX_CLIENT_SECRET=xxx CWB_API_KEY=xxx
+
+# Deploy
+fly deploy
+
+# The start.sh script auto-downloads taiwan.osm.pbf and builds the graph
+# if taiwan_osm.db is not found on the volume.
 ```
 
-### 2. 建立路網資料庫（已有 taiwan_osm.db 可跳過）
+**Machine specs**: shared-cpu-2x (2GB RAM), 5GB volume, Tokyo (nrt) region
+
+## Local Development
+
 ```bash
-python build_osm_graph.py \
-  --pbf taiwan-260419_osm.pbf \
-  --db  taiwan_osm.db
-# 約需 3 分鐘，產生 ~1.7 GB DB
+# 1. Install dependencies
+pip install -r requirements.txt
+
+# 2. Set environment variables
+cp env.example .env   # Fill in TDX / CWA API keys
+
+# 3. Build road network (only once, ~3 min)
+python build_osm_graph.py --pbf taiwan.osm.pbf --db taiwan_osm.db
+
+# 4. Start server
+uvicorn osm_api:app --host 127.0.0.1 --port 8000
+
+# 5. Open browser
+#    Navigation: http://127.0.0.1:8000/app
+#    Admin:      http://127.0.0.1:8000/admin
 ```
 
-### 3. 啟動後端 API
-```bash
-DB_PATH=taiwan_osm.db uvicorn osm_api:app --host 127.0.0.1 --port 8000
-# 啟動時自動預載主幹圖，約需 15 秒，完成後顯示「就緒」
+## API Endpoints
 
-```
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/` | Service health check |
+| GET | `/stats` | System statistics (graph, sync status) |
+| GET | `/nearest?lat=&lon=` | Nearest road network node |
+| POST | `/route` | Route planning (segments + GeoJSON + analysis) |
+| GET | `/events` | List active events |
+| POST | `/events` | Add manual event |
+| DELETE | `/events/{id}` | Delete event |
+| DELETE | `/events` | Clear all events + weather |
+| GET | `/weather` | List active weather |
+| POST | `/weather` | Add manual weather |
+| POST | `/dynamic/recompute` | Recompute dynamic costs |
+| GET | `/sync/status` | Sync engine status |
+| POST | `/sync/trigger` | Trigger manual sync |
+| GET | `/geocode?q=` | Address/landmark geocoding |
+| GET | `/app` | Serve navigation UI |
+| GET | `/admin` | Serve admin dashboard |
 
-### 4. 開啟前端
-直接在瀏覽器開啟 `index.html`，確認 API Base URL 為 `http://127.0.0.1:8000`。
+## Routing Engine
 
-# 解決前端403R(不直接開html file)
-cd D:\python  #改你的工作區
-python -m http.server 5500
-http://127.0.0.1:5500/index.html
----
+- **Graph loading**: pre-loads motorway→tertiary into memory at startup (namedtuple edges for ~60% memory savings)
+- **Road speeds**: motorway=110, trunk=90, primary=60, secondary=50, tertiary=40, residential=30 km/h
+- **Cost formula**: `edge_cost = base_cost × (time_weight + risk_score × risk_weight)`
+- **Event multipliers**: accident=1.80, construction=1.55, closure=999, congestion=1.35
+- **Weather multipliers**: rain×0.40, wind×0.20, visibility×0.35, warning×0.30
+- **A* heuristic**: haversine distance / 120 km/h (admissible, guarantees optimal path)
 
-## API 端點
+## Environment Variables
 
-| 方法 | 路徑 | 說明 |
-|------|------|------|
-| GET  | `/stats` | 統計（含 graph_loaded 狀態）|
-| GET  | `/nearest?lat=&lon=` | 最近路網節點 |
-| GET  | `/events` | 列出活躍事件 |
-| POST | `/events` | 新增事件（座標 + 半徑）|
-| DELETE | `/events` | 清空所有事件/天氣 |
-| DELETE | `/events/{id}` | 刪除單一事件 |
-| POST | `/weather` | 新增天氣影響圈 |
-| POST | `/dynamic/recompute` | 套用因子並重載圖（約 20s）|
-| POST | `/route` | A* 路徑查詢 |
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `TDX_CLIENT_ID` | TDX OAuth2 Client ID | — |
+| `TDX_CLIENT_SECRET` | TDX OAuth2 Client Secret | — |
+| `CWB_API_KEY` | CWA Weather API Key | — |
+| `TGOS_API_KEY` | TGOS Geocoding API Key (optional) | — |
+| `DB_PATH` | SQLite database path | `taiwan_osm.db` |
+| `AUTO_SYNC_INTERVAL` | Sync interval in seconds, 0=disable | `300` |
 
-## 完整使用流程
+## Database
 
-```
-1. 啟動 API → 等待「就緒」
-2. 開啟 index.html
-3. （可選）新增事件 / 天氣
-4. （可選）點「重算 dynamic_cost」套用因子
-5. 點地圖或輸入座標 → 查詢路徑
-```
+| Table | Purpose | Scale |
+|-------|---------|-------|
+| `osm_nodes` | Road network nodes | ~3.76M |
+| `osm_edges` | Edges with dynamic fields | ~7.65M |
+| `dynamic_events` | Traffic events | ~300 realtime |
+| `dynamic_weather` | Weather conditions | ~50-80 realtime |
+| `vd_positions` | VD detector position cache | ~1,361 |
 
----
+## Performance Optimizations
 
-## 路由引擎設計
+- **namedtuple edges** instead of dicts (~60% memory reduction)
+- **Cursor iteration** instead of fetchall() during graph loading
+- **Cached node/edge counts** via background thread (avoids COUNT(*) on millions of rows)
+- **Targeted recompute**: only resets edges with modified dynamic values
+- **WAL checkpoint** after recompute to prevent unbounded WAL growth
+- **TDX auth backoff**: 5-minute cooldown on authentication failure
+- **VD position cache**: static detector positions cached in DB, avoids repeated API calls
 
-**路網載入策略**：
-- **長程（> 15 km）**：使用啟動時預載的主幹圖（motorway → tertiary），常駐記憶體，查詢無需再讀 DB
-- **短程（≤ 15 km）**：從 DB 局部載入完整路型（含 residential / service），確保巷道可用
+## Data Sources
 
-**跨路型互通**：
-- OSM 所有 way 共用同一個 node_id 做交叉路口，無需任何 connector 邏輯
-- 高速公路 → 匝道 → 省道 → 市區道路，路徑自然銜接
-
-**A* 啟發式**：
-- 使用 haversine 直線距離除以最高速度（120 km/h）估算剩餘時間
-- 保證找到最優解，速度比純 Dijkstra 快 3–10 倍
-
-**動態因子**：
-- 事件/天氣以地理圓範圍套用到 DB 的 `dynamic_mult` / `closure_flag` 欄位
-- 執行 `/dynamic/recompute` 後會重新從 DB 載入圖，所有在途路徑自動反映
-
----
-
-## 前端地圖顏色說明
-
-| 顏色 | 道路類型 |
-|------|----------|
-| 藍色 | motorway 高速公路 |
-| 綠色 | trunk 快速道路 |
-| 橘色 | primary 主要道路 |
-| 紫色 | secondary 次要道路 |
-| 灰色 | tertiary 及其他 |
-
----
-
-## DB 規格
-
-| 項目 | 數值 |
-|------|------|
-| 檔案大小 | ~1.7 GB |
-| osm_nodes | 3,760,969 |
-| osm_edges | 7,647,722 |
-| 資料來源 | taiwan-260419_osm.pbf（OpenStreetMap）|
-| 建圖時間 | 約 3 分鐘 |
-
----
-
-## 已修正的舊系統問題
-
-| 問題 | 修正 |
-|------|------|
-| heapq TypeError（list[dict] 比較）| A* heap 加入 itertools.counter |
-| /route 每次重算全圖 | 預載圖常駐記憶體，recompute 獨立觸發 |
-| O(n²) connector 建置 | OSM 天然交叉，無需 connector |
-| 路型孤島（省道無法接高速）| OSM 路口 node 共用，自然互通 |
-| 憑證明文存放 | .env 管理，加入 .gitignore |
-| TDX token 無 thread-lock | threading.Lock 保護 |
+- [OpenStreetMap](https://www.openstreetmap.org/) — road network (via Geofabrik taiwan.osm.pbf)
+- [TDX](https://tdx.transportdata.tw/) — real-time traffic speed, incidents
+- [CWA](https://opendata.cwa.gov.tw/) — weather stations, rainfall
+- [TGOS](https://api.tgos.tw/) — address geocoding (optional)
+- [Nominatim](https://nominatim.openstreetmap.org/) — POI/landmark search

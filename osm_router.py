@@ -18,9 +18,12 @@ import itertools
 import math
 import sqlite3
 import uuid
+from collections import namedtuple
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+Edge = namedtuple('Edge', ['to', 'eid', 'hw', 'name', 'dist', 'spd', 'cost', 'risk', 'la', 'loa', 'lb', 'lob'])
 
 HIGHWAY_SPEEDS: dict[str, float] = {
     "motorway":110,"motorway_link":70,"trunk":90,"trunk_link":60,
@@ -82,6 +85,8 @@ class OSMRouter:
         self._graph: Dict[int,List[dict]] = {}
         self._ncoords: Dict[int,Tuple[float,float]] = {}
         self._graph_loaded = False
+        self._osm_node_count = 0
+        self._osm_edge_count = 0
 
     def init_dynamic_schema(self):
         with _conn(self.db_path) as conn:
@@ -110,38 +115,43 @@ class OSMRouter:
         spd = max(float(r["speed_kmh"] or 30) / max(float(r["mult"] or 1), 0.01), MIN_SPEED)
         la, loa = float(r["lat_a"] or 0), float(r["lon_a"] or 0)
         lb, lob = float(r["lat_b"] or 0), float(r["lon_b"] or 0)
-        rec = {"to": tn, "eid": r["edge_id"], "hw": r["highway"], "name": r["name"] or "",
-               "dist": dist, "spd": float(r["speed_kmh"] or 30), "cost": (dist / spd) * 60,
-               "risk": float(r["risk"] or 0), "la": la, "loa": loa, "lb": lb, "lob": lob}
-        rev = {"to": fn, "eid": r["edge_id"], "hw": r["highway"], "name": r["name"] or "",
-               "dist": dist, "spd": float(r["speed_kmh"] or 30), "cost": (dist / spd) * 60,
-               "risk": float(r["risk"] or 0), "la": lb, "loa": lob, "lb": la, "lob": loa}
-        return fn, tn, la, loa, lb, lob, rec, rev
+        raw_spd = float(r["speed_kmh"] or 30)
+        rec = Edge(tn, r["edge_id"], r["highway"], r["name"] or "",
+                   dist, raw_spd, (dist / spd) * 60, float(r["risk"] or 0),
+                   la, loa, lb, lob)
+        return fn, tn, la, loa, lb, lob, rec
 
     def load_graph(self, verbose=True) -> int:
         import time; t0=time.time()
         if verbose: print("載入主幹路網...",flush=True)
         hw_ph=",".join("?"*len(MAJOR_HW))
+        graph = collections.defaultdict(list)
+        ncoords = {}
+        edge_count = 0
         with _conn(self.db_path) as conn:
-            rows=conn.execute(f"""SELECT from_node,to_node,edge_id,highway,name,
+            cur=conn.execute(f"""SELECT from_node,to_node,edge_id,highway,name,
                 length_km,speed_kmh,lat_a,lon_a,lat_b,lon_b,
                 COALESCE(dynamic_mult,1.0) AS mult,
                 COALESCE(closure_flag,0) AS closed,
                 COALESCE(risk_score,0) AS risk
-                FROM osm_edges WHERE highway IN ({hw_ph})""",MAJOR_HW).fetchall()
-
-        graph = collections.defaultdict(list)
-        ncoords = {}
-        for r in rows:
-            if int(r["closed"] or 0): continue
-            fn, tn, la, loa, lb, lob, rec, _ = self._build_edge(r)
-            graph[fn].append(rec)
-            ncoords[fn] = (la, loa); ncoords[tn] = (lb, lob)
+                FROM osm_edges WHERE highway IN ({hw_ph})""",MAJOR_HW)
+            for r in cur:
+                edge_count += 1
+                if int(r["closed"] or 0): continue
+                fn, tn, la, loa, lb, lob, rec = self._build_edge(r)
+                graph[fn].append(rec)
+                ncoords[fn] = (la, loa); ncoords[tn] = (lb, lob)
 
         self._graph = graph
         self._ncoords = ncoords; self._graph_loaded = True
-        if verbose: print(f"  {len(graph):,} 節點，{len(rows):,} 邊  ({time.time()-t0:.1f}s)",flush=True)
-        return len(rows)
+        import threading
+        def _count():
+            with _conn(self.db_path) as conn:
+                self._osm_node_count=conn.execute("SELECT COUNT(*) FROM osm_nodes").fetchone()[0]
+                self._osm_edge_count=conn.execute("SELECT COUNT(*) FROM osm_edges").fetchone()[0]
+        threading.Thread(target=_count, daemon=True).start()
+        if verbose: print(f"  {len(graph):,} 節點，{edge_count:,} 邊  ({time.time()-t0:.1f}s)",flush=True)
+        return edge_count
 
     def _load_local_graph(self, bbox, pad=0.025):
         min_lat, min_lon, max_lat, max_lon = bbox
@@ -158,7 +168,7 @@ class OSMRouter:
         local = collections.defaultdict(list)
         for r in rows:
             if int(r["closed"] or 0): continue
-            fn, tn, la, loa, lb, lob, rec, _ = self._build_edge(r)
+            fn, tn, la, loa, lb, lob, rec = self._build_edge(r)
             local[fn].append(rec)
             self._ncoords.setdefault(fn, (la, loa))
             self._ncoords.setdefault(tn, (lb, lob))
@@ -197,11 +207,7 @@ class OSMRouter:
         s_la, s_lo = sc
         e_la, e_lo = ec
         direct_km = haversine_km(s_la, s_lo, e_la, e_lo)
-        if direct_km <= SHORT_DIST_KM:
-            bbox = (min(s_la, e_la), min(s_lo, e_lo), max(s_la, e_la), max(s_lo, e_lo))
-            graph, _ = self._load_local_graph(bbox, pad=0.03)
-        else:
-            graph = self._graph
+        graph = self._graph
         w = MODE_WEIGHTS.get(mode, MODE_WEIGHTS["balanced"])
 
         def h(nid):
@@ -220,16 +226,16 @@ class OSMRouter:
                 cur = end_node
                 while cur in came_from:
                     prev, e = came_from[cur]
-                    seg_min = (e["dist"] / max(e["spd"], MIN_SPEED)) * 60
+                    seg_min = (e.dist / max(e.spd, MIN_SPEED)) * 60
                     edges.append({
-                        "edge_id": e["eid"], "highway": e["hw"], "name": e["name"],
-                        "length_km": e["dist"], "speed_kmh": e["spd"],
-                        "travel_min": seg_min, "risk_score": e["risk"],
+                        "edge_id": e.eid, "highway": e.hw, "name": e.name,
+                        "length_km": e.dist, "speed_kmh": e.spd,
+                        "travel_min": seg_min, "risk_score": e.risk,
                         "from_node": prev, "to_node": cur,
-                        "lat_a": e["la"], "lon_a": e["loa"],
-                        "lat_b": e["lb"], "lon_b": e["lob"],
+                        "lat_a": e.la, "lon_a": e.loa,
+                        "lat_b": e.lb, "lon_b": e.lob,
                     })
-                    tot_km += e["dist"]
+                    tot_km += e.dist
                     tot_min += seg_min
                     cur = prev
                 edges.reverse()
@@ -238,8 +244,8 @@ class OSMRouter:
             if g > best.get(node, float("inf")):
                 continue
             for e in graph.get(node, []):
-                nxt = e["to"]
-                ec2 = e["cost"] * (w["time"] + e["risk"] * w["risk"])
+                nxt = e.to
+                ec2 = e.cost * (w["time"] + e.risk * w["risk"])
                 if ec2 >= 1e8:
                     continue
                 ng = g + ec2
@@ -247,7 +253,7 @@ class OSMRouter:
                     continue
                 best[nxt] = ng
                 came_from[nxt] = (node, e)
-                self._ncoords.setdefault(nxt, (e["lb"], e["lob"]))
+                self._ncoords.setdefault(nxt, (e.lb, e.lob))
                 heapq.heappush(heap, (ng + h(nxt), next(_CTR), nxt, ng))
 
         raise ValueError(f"找不到路徑（{start_node}→{end_node}，直線{direct_km:.1f}km）。"
@@ -290,7 +296,7 @@ class OSMRouter:
     def recompute_dynamic_cost(self, mode="balanced"):
         with _conn(self.db_path) as conn:
             cur=conn.cursor()
-            cur.execute("UPDATE osm_edges SET dynamic_mult=1.0,closure_flag=0,risk_score=0.0")
+            cur.execute("UPDATE osm_edges SET dynamic_mult=1.0,closure_flag=0,risk_score=0.0 WHERE dynamic_mult!=1.0 OR closure_flag!=0 OR risk_score!=0.0")
             conn.commit()
             for ev in cur.execute("SELECT * FROM dynamic_events WHERE is_active=1").fetchall():
                 elat,elon,erad=float(ev["lat"] or 0),float(ev["lon"] or 0),float(ev["radius_km"] or 0.5)
@@ -315,16 +321,17 @@ class OSMRouter:
                 cur.execute("UPDATE osm_edges SET dynamic_mult=MAX(dynamic_mult,?),risk_score=risk_score+? WHERE lat_a BETWEEN ? AND ? AND lon_a BETWEEN ? AND ?",
                     (wm,rw,wlat-dlat,wlat+dlat,wlon-dlon,wlon+dlon))
             conn.commit()
+            conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
         self.load_graph(verbose=False)
 
     def stats(self):
+        s={"db_path":self.db_path,"graph_loaded":self._graph_loaded,
+           "graph_nodes":len(self._graph),
+           "graph_edges":sum(len(v) for v in self._graph.values()),
+           "osm_nodes":self._osm_node_count,
+           "osm_edges":self._osm_edge_count}
         with _conn(self.db_path) as conn:
             cur=conn.cursor()
-            s={"db_path":self.db_path,"graph_loaded":self._graph_loaded,
-               "graph_nodes":len(self._graph),
-               "graph_edges":sum(len(v) for v in self._graph.values()),
-               "osm_nodes":cur.execute("SELECT COUNT(*) FROM osm_nodes").fetchone()[0],
-               "osm_edges":cur.execute("SELECT COUNT(*) FROM osm_edges").fetchone()[0]}
             try:
                 s["active_events"]=cur.execute("SELECT COUNT(*) FROM dynamic_events WHERE is_active=1").fetchone()[0]
                 s["active_weather"]=cur.execute("SELECT COUNT(*) FROM dynamic_weather WHERE is_active=1").fetchone()[0]

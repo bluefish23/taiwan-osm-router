@@ -91,7 +91,8 @@ class TDXClient:
                 self._token_expiry = time.time() + data.get("expires_in", 86400)
                 logger.info("TDX token refreshed, expires_in=%s", data.get("expires_in"))
             except Exception as e:
-                logger.error("TDX token refresh failed: %s", e)
+                self._token_expiry = time.time() + 300
+                logger.error("TDX token refresh failed (retry in 5min): %s", e)
 
     def get(self, path: str) -> Optional[dict]:
         self._ensure_token()

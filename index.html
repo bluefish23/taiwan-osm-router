@@ -2,123 +2,169 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>台灣 OSM 動態路網導航</title>
+<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no"/>
+<title>台灣動態導航</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
-<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500&family=Barlow+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
 <style>
 :root{
-  --bg:#060d1a;--surf:#0b1628;--surf2:#101f35;--border:#192c47;
+  --bg:#060d1a;--surf:rgba(11,22,40,.92);--surf2:rgba(16,31,53,.95);--border:#192c47;
   --accent:#00d4ff;--acc2:#0099cc;--green:#00e5a0;--amber:#ffb400;
-  --red:#ff4444;--purple:#a78bfa;--text:#cde4f5;--muted:#4a6d99;
+  --red:#ff4444;--text:#cde4f5;--muted:#4a6d99;
   --mono:'JetBrains Mono',monospace;--sans:'Barlow',sans-serif;--cond:'Barlow Condensed',sans-serif;
+  --radius:12px;--panel-w:340px;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14px;height:100vh;overflow:hidden}
-.layout{display:grid;grid-template-columns:370px 1fr;height:100vh}
 
-/* ── sidebar ── */
-.sidebar{display:flex;flex-direction:column;background:var(--surf);border-right:1px solid var(--border);overflow:hidden}
-.topbar{background:var(--bg);border-bottom:1px solid var(--border);padding:8px 14px;display:flex;align-items:center;gap:8px;flex-shrink:0}
-.dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex-shrink:0;transition:.3s}
-.dot.on{background:var(--green);box-shadow:0 0 7px var(--green)}
-.dot.off{background:var(--red)}
-.conn-text{font-family:var(--mono);font-size:11px;color:var(--muted);flex:1}
-.conn-text.on{color:var(--green)}.conn-text.off{color:var(--red)}
-.api-in{background:var(--surf2);border:1px solid var(--border);border-radius:5px;padding:4px 8px;
-  font-family:var(--mono);font-size:11px;color:var(--accent);width:190px;outline:none}
-.api-in:focus{border-color:var(--accent)}
+#map{position:fixed;inset:0;z-index:0}
 
-.brand{padding:14px 16px 10px;border-bottom:1px solid var(--border);flex-shrink:0}
-.brand h1{font-family:var(--cond);font-size:20px;font-weight:700;color:var(--accent);letter-spacing:.5px}
-.brand p{font-size:11px;color:var(--muted);margin-top:2px}
+/* Route Panel (top-left) */
+.route-panel{
+  position:fixed;top:16px;left:16px;z-index:600;
+  width:var(--panel-w);background:var(--surf);backdrop-filter:blur(16px);
+  border:1px solid var(--border);border-radius:var(--radius);
+  padding:16px;box-shadow:0 8px 32px rgba(0,0,0,.4);
+}
+.rp-header{display:flex;align-items:center;gap:8px;margin-bottom:12px}
+.rp-header h1{font-family:var(--cond);font-size:18px;font-weight:700;color:var(--accent);flex:1}
+.rp-dot{width:8px;height:8px;border-radius:50%;background:var(--muted);transition:.3s}
+.rp-dot.on{background:var(--green);box-shadow:0 0 6px var(--green)}
+.rp-dot.off{background:var(--red)}
 
-.scroll{flex:1;overflow-y:auto;padding:10px}
-.scroll::-webkit-scrollbar{width:3px}
-.scroll::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+.search-group{position:relative;margin-bottom:8px}
+.search-row{display:flex;gap:6px;align-items:center}
+.search-input{
+  flex:1;background:rgba(6,13,26,.7);border:1px solid var(--border);border-radius:8px;
+  padding:10px 12px;font-size:14px;color:var(--text);outline:none;transition:.15s;
+  font-family:var(--sans);
+}
+.search-input:focus{border-color:var(--accent)}
+.search-input::placeholder{color:var(--muted)}
+.loc-btn{
+  width:36px;height:36px;border-radius:8px;background:rgba(6,13,26,.7);
+  border:1px solid var(--border);color:var(--accent);font-size:16px;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;transition:.15s;flex-shrink:0;
+}
+.loc-btn:hover{background:var(--accent);color:#000;border-color:var(--accent)}
 
-/* cards */
-.card{background:var(--surf2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px}
-.card-title{font-family:var(--cond);font-size:12px;font-weight:600;color:var(--muted);
-  text-transform:uppercase;letter-spacing:.8px;margin-bottom:10px}
+.suggestions{
+  position:absolute;top:100%;left:0;right:0;z-index:700;
+  background:rgba(11,22,40,.97);border:1px solid var(--border);border-radius:8px;
+  margin-top:4px;max-height:200px;overflow-y:auto;display:none;
+}
+.suggestions.show{display:block}
+.sug-item{
+  padding:10px 12px;font-size:13px;color:var(--text);cursor:pointer;
+  border-bottom:1px solid rgba(25,44,71,.5);transition:.1s;
+}
+.sug-item:last-child{border-bottom:none}
+.sug-item:hover{background:rgba(0,212,255,.1)}
+.sug-item .sug-src{font-size:10px;color:var(--muted);margin-left:6px}
 
-/* stats */
-.sg{display:grid;grid-template-columns:1fr 1fr;gap:6px}
-.sb{background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:9px 10px}
-.sb .l{font-size:11px;color:var(--muted);margin-bottom:2px}
-.sb .v{font-family:var(--mono);font-size:16px;font-weight:500;color:var(--text)}
+.mode-pills{display:flex;gap:4px;margin:10px 0}
+.pill{
+  flex:1;padding:8px;border-radius:8px;text-align:center;font-size:12px;font-weight:600;
+  font-family:var(--cond);cursor:pointer;border:1px solid var(--border);
+  background:transparent;color:var(--muted);transition:.15s;user-select:none;
+}
+.pill.active{background:var(--accent);border-color:var(--accent);color:#000}
+.pill:hover:not(.active){border-color:var(--accent);color:var(--accent)}
 
-/* forms */
-label{display:block;font-size:12px;color:var(--muted);margin:8px 0 3px}
-label:first-child{margin-top:0}
-input,select,textarea{width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;
-  padding:7px 9px;font-family:var(--sans);font-size:13px;color:var(--text);outline:none;transition:.15s}
-input:focus,select:focus,textarea:focus{border-color:var(--accent)}
-input.bad{border-color:var(--red)!important}
-textarea{resize:vertical;min-height:46px;font-size:12px}
-select option{background:var(--surf2)}
-.row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.row4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px}
+.nav-btn{
+  width:100%;padding:12px;border:none;border-radius:8px;
+  background:var(--accent);color:#000;font-family:var(--cond);
+  font-size:15px;font-weight:700;cursor:pointer;letter-spacing:.3px;transition:.15s;
+}
+.nav-btn:hover{background:var(--acc2)}
+.nav-btn:disabled{opacity:.4;cursor:not-allowed}
 
-/* buttons */
-button{border:none;border-radius:6px;padding:8px 12px;font-family:var(--cond);
-  font-size:13px;font-weight:600;cursor:pointer;letter-spacing:.2px;transition:.15s;width:100%}
-.pr{background:var(--accent);color:#000}.pr:hover{background:var(--acc2)}
-.sc{background:var(--border);color:var(--text)}.sc:hover{background:#243550}
-.dn{background:#2a1010;color:var(--red);border:1px solid #4a2020}.dn:hover{background:#3a1515}
-.gn{background:#002e1f;color:var(--green);border:1px solid #004d35}.gn:hover{background:#003d28}
-.am{background:#2a1e00;color:var(--amber);border:1px solid #4a3600}.am:hover{background:#3a2800}
-.g2{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px}
-.g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:8px}
+.rp-footer{display:flex;align-items:center;justify-content:space-between;margin-top:10px}
+.rp-footer a{font-size:11px;color:var(--muted);text-decoration:none}
+.rp-footer a:hover{color:var(--accent)}
+.rp-msg{font-size:11px;margin-top:6px;padding:5px 8px;border-radius:6px;font-family:var(--mono);display:none}
+.rp-msg.ok{background:#001f14;color:var(--green);border:1px solid #00402a;display:block}
+.rp-msg.err{background:#200000;color:var(--red);border:1px solid #500000;display:block}
+.rp-msg.info{background:#001428;color:var(--accent);border:1px solid #003355;display:block}
 
-/* mode tabs */
-.mtabs{display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px}
-.mt{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px;
-  text-align:center;cursor:pointer;font-size:12px;color:var(--muted);transition:.15s;user-select:none}
-.mt.on{background:var(--accent);border-color:var(--accent);color:#000;font-weight:600}
-.mt:hover:not(.on){border-color:var(--accent);color:var(--accent)}
+/* Layer Button (top-right) */
+.layer-btn{
+  position:fixed;top:16px;right:16px;z-index:600;
+  width:40px;height:40px;border-radius:10px;background:var(--surf);backdrop-filter:blur(12px);
+  border:1px solid var(--border);color:var(--text);font-size:18px;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;transition:.15s;
+}
+.layer-btn:hover{background:var(--accent);color:#000;border-color:var(--accent)}
+.layer-dropdown{
+  position:fixed;top:62px;right:16px;z-index:600;
+  background:var(--surf);backdrop-filter:blur(16px);border:1px solid var(--border);
+  border-radius:var(--radius);padding:12px;min-width:180px;display:none;
+  box-shadow:0 8px 32px rgba(0,0,0,.4);
+}
+.layer-dropdown.show{display:block}
+.ld-item{display:flex;align-items:center;gap:8px;padding:7px 0;cursor:pointer;user-select:none}
+.ld-dot{width:10px;height:10px;border-radius:3px;border:1px solid rgba(255,255,255,.2)}
+.ld-label{font-size:12px;color:var(--muted);flex:1}
+.ld-item.on .ld-label{color:var(--text)}
+.ld-count{font-family:var(--mono);font-size:11px;color:var(--accent)}
 
-/* messages */
-.msg{font-size:12px;margin-top:7px;padding:5px 9px;border-radius:5px;
-  line-height:1.5;font-family:var(--mono);display:none}
-.msg.ok{background:#001f14;color:var(--green);border:1px solid #00402a}
-.msg.err{background:#200000;color:var(--red);border:1px solid #500000}
-.msg.info{background:#001428;color:var(--accent);border:1px solid #003355}
+/* GPS Button (bottom-right) */
+.gps-btn{
+  position:fixed;bottom:30px;right:16px;z-index:600;
+  width:44px;height:44px;border-radius:50%;background:var(--surf);backdrop-filter:blur(12px);
+  border:1px solid var(--border);color:var(--accent);font-size:20px;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;transition:.15s;
+  box-shadow:0 4px 16px rgba(0,0,0,.3);
+}
+.gps-btn:hover{background:var(--accent);color:#000}
+.gps-btn.tracking{border-color:var(--accent);box-shadow:0 0 12px rgba(0,212,255,.3)}
 
-/* result edges list */
-.elist{max-height:180px;overflow-y:auto;margin-top:8px}
-.ei{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px 9px;margin-bottom:5px}
-.ei .n{font-family:var(--mono);font-size:10px;color:var(--accent);margin-bottom:2px}
-.ei .m{font-size:11px;color:var(--muted)}
+/* Result Panel (bottom) */
+.result-panel{
+  position:fixed;bottom:0;left:0;right:0;z-index:500;
+  background:var(--surf2);backdrop-filter:blur(16px);border-top:1px solid var(--border);
+  border-radius:var(--radius) var(--radius) 0 0;
+  padding:16px 20px;transform:translateY(100%);transition:transform .35s ease;
+  max-height:45vh;overflow-y:auto;
+}
+.result-panel.show{transform:translateY(0)}
+.rp-close{
+  position:absolute;top:10px;right:16px;background:none;border:none;
+  color:var(--muted);font-size:18px;cursor:pointer;width:auto;padding:4px;
+}
+.rp-close:hover{color:var(--text)}
+.result-summary{display:flex;gap:20px;align-items:baseline;margin-bottom:12px;flex-wrap:wrap}
+.rs-big{font-family:var(--cond);font-size:24px;font-weight:700;color:var(--accent)}
+.rs-sub{font-size:13px;color:var(--muted)}
+.result-steps{list-style:none}
+.result-steps li{
+  padding:8px 0;border-bottom:1px solid rgba(25,44,71,.4);
+  display:flex;align-items:center;gap:10px;font-size:13px;
+}
+.result-steps li:last-child{border-bottom:none}
+.step-icon{width:24px;height:24px;border-radius:6px;background:var(--border);
+  display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--accent);flex-shrink:0}
+.step-name{flex:1;color:var(--text)}
+.step-dist{font-family:var(--mono);font-size:11px;color:var(--muted)}
+.result-actions{display:flex;gap:8px;margin-top:12px}
+.ra-btn{
+  padding:8px 16px;border-radius:8px;font-size:12px;font-family:var(--cond);
+  font-weight:600;cursor:pointer;border:1px solid var(--border);
+  background:transparent;color:var(--muted);width:auto;transition:.15s;
+}
+.ra-btn:hover{border-color:var(--accent);color:var(--accent)}
 
-/* result summary */
-.rg{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:8px}
-.rb{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px;text-align:center}
-.rb .l{font-size:10px;color:var(--muted)}.rb .v{font-family:var(--mono);font-size:14px;color:var(--accent);font-weight:500}
+/* Legend */
+.legend{
+  position:fixed;bottom:30px;left:16px;z-index:400;
+  background:var(--surf);backdrop-filter:blur(12px);border:1px solid var(--border);
+  border-radius:8px;padding:8px 12px;font-size:11px;color:var(--muted);
+  font-family:var(--mono);line-height:1.8;
+}
+.legend b{color:var(--text)}
 
-/* events log */
-.evlog{max-height:120px;overflow-y:auto;margin-top:6px}
-.evrow{border-left:2px solid var(--purple);padding:4px 7px;margin-bottom:4px;font-size:11px;color:var(--muted)}
-.evrow span{color:var(--text);font-weight:500}
-
-/* map overlay */
-.minfo{position:absolute;right:12px;top:12px;z-index:500;
-  background:rgba(6,13,26,.92);backdrop-filter:blur(8px);border:1px solid var(--border);
-  border-radius:9px;padding:9px 13px;font-size:12px;color:var(--muted);max-width:210px;line-height:1.6}
-.minfo .hi{color:var(--accent);font-family:var(--mono);font-size:11px}
-.cbadge{position:absolute;left:12px;bottom:20px;z-index:500;
-  background:rgba(6,13,26,.9);border:1px solid var(--border);border-radius:6px;
-  padding:5px 11px;font-family:var(--mono);font-size:11px;color:var(--amber)}
-
-/* overlay toggles */
-.otoggle{display:flex;align-items:center;gap:8px;padding:6px 0;cursor:pointer;user-select:none}
-.otoggle .odot{width:12px;height:12px;border-radius:3px;flex-shrink:0;border:1px solid rgba(255,255,255,.2)}
-.otoggle .olbl{font-size:12px;color:var(--muted);flex:1}
-.otoggle .ocnt{font-family:var(--mono);font-size:11px;color:var(--accent)}
-.otoggle.on .olbl{color:var(--text)}
-
-/* loading overlay */
-#loader{display:none;position:fixed;inset:0;background:rgba(6,13,26,.8);z-index:999;
+/* Loading */
+#loader{display:none;position:fixed;inset:0;background:rgba(6,13,26,.75);z-index:999;
   align-items:center;justify-content:center;flex-direction:column;gap:14px}
 #loader.show{display:flex}
 .spin{width:40px;height:40px;border:3px solid var(--border);border-top-color:var(--accent);
@@ -126,457 +172,359 @@ button{border:none;border-radius:6px;padding:8px 12px;font-family:var(--cond);
 @keyframes spin{to{transform:rotate(360deg)}}
 .ltxt{font-family:var(--cond);font-size:16px;color:var(--accent)}
 
-@media(max-width:900px){
-  .layout{grid-template-columns:1fr}
-  .sidebar{height:60vh;overflow-y:auto}
-  body{overflow:auto;height:auto}
-  #map{height:40vh!important}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.6;transform:scale(1.8)}}
+.gps-pulse{animation:pulse 2s ease-in-out infinite}
+
+/* Driving Mode */
+body.driving .route-panel,
+body.driving .layer-btn,
+body.driving .layer-dropdown,
+body.driving .legend,
+body.driving .result-panel,
+body.driving .gps-btn{display:none!important}
+
+.drive-hud{display:none;position:fixed;inset:0;z-index:800;pointer-events:none}
+body.driving .drive-hud{display:block}
+
+.drive-top{
+  position:absolute;top:0;left:0;right:0;pointer-events:auto;
+  background:linear-gradient(180deg,rgba(6,13,26,.95) 0%,rgba(6,13,26,.8) 80%,transparent 100%);
+  padding:16px 20px 28px;
+}
+.drive-road{font-family:var(--cond);font-size:28px;font-weight:700;color:#fff;margin-bottom:4px}
+.drive-next{font-size:13px;color:var(--muted)}
+.drive-next span{color:var(--accent)}
+
+.drive-bottom{
+  position:absolute;bottom:0;left:0;right:0;pointer-events:auto;
+  background:linear-gradient(0deg,rgba(6,13,26,.95) 0%,rgba(6,13,26,.8) 80%,transparent 100%);
+  padding:28px 20px 20px;display:flex;align-items:center;gap:16px;
+}
+.drive-stat{flex:1;text-align:center}
+.drive-stat .ds-val{font-family:var(--cond);font-size:26px;font-weight:700;color:var(--accent)}
+.drive-stat .ds-lbl{font-size:11px;color:var(--muted);margin-top:2px}
+.drive-stop{
+  width:56px;height:56px;border-radius:50%;background:var(--red);border:none;
+  color:#fff;font-size:22px;cursor:pointer;flex-shrink:0;pointer-events:auto;
+  box-shadow:0 4px 20px rgba(255,68,68,.4);transition:.15s;
+}
+.drive-stop:hover{background:#cc2222;transform:scale(1.05)}
+
+.drive-recenter{
+  position:absolute;bottom:100px;right:16px;pointer-events:auto;
+  width:44px;height:44px;border-radius:50%;background:var(--surf);backdrop-filter:blur(12px);
+  border:1px solid var(--border);color:var(--accent);font-size:18px;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;
+}
+
+@media(max-width:600px){
+  .route-panel{top:8px;left:8px;right:8px;width:auto}
+  .legend{display:none}
+  .result-panel{max-height:55vh}
 }
 </style>
 </head>
 <body>
-<div id="loader"><div class="spin"></div><div class="ltxt" id="ltxt">初始化路由引擎...</div></div>
 
-<div class="layout">
-<!-- sidebar -->
-<aside class="sidebar">
-  <div class="topbar">
-    <div class="dot" id="dot"></div>
-    <span class="conn-text" id="ctext">未連線</span>
-    <input class="api-in" id="apiBase" value="http://127.0.0.1:8000" onchange="ping()"/>
-  </div>
-  <div class="brand">
-    <h1>台灣 OSM 動態導航</h1>
-    <p>OSM 全路型路網 · A* 引擎 · TDX/CWA 即時資料同步</p>
+<div id="loader"><div class="spin"></div><div class="ltxt" id="ltxt">路線計算中...</div></div>
+<div id="map"></div>
+
+<!-- Route Panel -->
+<div class="route-panel">
+  <div class="rp-header">
+    <h1>台灣動態導航</h1>
+    <div class="rp-dot" id="connDot"></div>
   </div>
 
-  <div class="scroll">
-    <!-- Stats -->
-    <div class="card">
-      <div class="card-title">路網統計</div>
-      <div class="sg">
-        <div class="sb"><div class="l">OSM 節點</div><div class="v" id="sON">—</div></div>
-        <div class="sb"><div class="l">OSM 邊</div><div class="v" id="sOE">—</div></div>
-        <div class="sb"><div class="l">已載入節點</div><div class="v" id="sGN">—</div></div>
-        <div class="sb"><div class="l">已載入邊</div><div class="v" id="sGE">—</div></div>
-      </div>
-      <div class="g2" style="margin-top:8px">
-        <button class="sc" onclick="fetchStats()">更新統計</button>
-        <button class="sc" onclick="ping()">測試連線</button>
-      </div>
-      <div id="sysMsg" class="msg"></div>
+  <div class="search-group">
+    <div class="search-row">
+      <input class="search-input" id="inputStart" placeholder="起點：地址、地標或座標" autocomplete="off"/>
+      <button class="loc-btn" id="btnGpsStart" title="使用目前位置">📍</button>
     </div>
-
-    <!-- Sync Status -->
-    <div class="card" id="syncCard" style="display:none">
-      <div class="card-title">即時資料同步
-        <span id="syncDot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted);margin-left:6px;vertical-align:middle"></span>
-      </div>
-      <div class="sg">
-        <div class="sb"><div class="l">上次同步</div><div class="v" id="syncTime">—</div></div>
-        <div class="sb"><div class="l">狀態</div><div class="v" id="syncOk">—</div></div>
-        <div class="sb"><div class="l">車速偵測</div><div class="v" id="syncSpeed">—</div></div>
-        <div class="sb"><div class="l">路況事件</div><div class="v" id="syncInc">—</div></div>
-        <div class="sb"><div class="l">氣象站</div><div class="v" id="syncWx">—</div></div>
-        <div class="sb"><div class="l">下次同步</div><div class="v" id="syncNext">—</div></div>
-      </div>
-      <div class="g2" style="margin-top:8px">
-        <button class="am" onclick="triggerSync()">手動同步</button>
-        <button class="sc" onclick="fetchSyncStatus()">更新狀態</button>
-      </div>
-      <div id="syncMsg" class="msg"></div>
-    </div>
-
-    <!-- Overlay layers -->
-    <div class="card">
-      <div class="card-title">即時圖層</div>
-      <div class="otoggle on" onclick="toggleLayer('congestion')">
-        <div class="odot" style="background:#ff4444"></div>
-        <div class="olbl">車速壅塞</div>
-        <div class="ocnt" id="olCong">—</div>
-      </div>
-      <div class="otoggle on" onclick="toggleLayer('events')">
-        <div class="odot" style="background:#ffb400"></div>
-        <div class="olbl">交通事件</div>
-        <div class="ocnt" id="olEvt">—</div>
-      </div>
-      <div class="otoggle on" onclick="toggleLayer('weather')">
-        <div class="odot" style="background:#4a9eff"></div>
-        <div class="olbl">天氣影響</div>
-        <div class="ocnt" id="olWx">—</div>
-      </div>
-      <div class="g2" style="margin-top:6px">
-        <button class="pr" onclick="loadOverlays()">載入圖層</button>
-        <button class="sc" onclick="clearOverlays()">清除圖層</button>
-      </div>
-    </div>
-
-    <!-- Mode -->
-    <div class="card">
-      <div class="card-title">導航模式</div>
-      <div class="mtabs">
-        <div class="mt" id="mf" onclick="setMode('fastest')">⚡ Fastest</div>
-        <div class="mt on" id="mb" onclick="setMode('balanced')">⚖ Balanced</div>
-        <div class="mt" id="ms" onclick="setMode('safest')">🛡 Safest</div>
-      </div>
-    </div>
-
-    <!-- Events -->
-    <div class="card">
-      <div class="card-title">新增事件</div>
-      <div class="row2">
-        <div>
-          <label>類型</label>
-          <select id="evType">
-            <option value="accident">車禍 accident</option>
-            <option value="construction">施工 construction</option>
-            <option value="closure">封閉 closure</option>
-            <option value="congestion">壅塞 congestion</option>
-            <option value="manual">手動 manual</option>
-          </select>
-        </div>
-        <div>
-          <label>嚴重度 (0–1)</label>
-          <input type="number" id="evSev" value="0.7" min="0" max="1" step="0.1"/>
-        </div>
-      </div>
-      <div class="row2">
-        <div><label>緯度</label><input type="number" id="evLat" value="25.0418" step="0.0001" oninput="validateCoord(this,'lat')"/></div>
-        <div><label>經度</label><input type="number" id="evLon" value="121.5365" step="0.0001" oninput="validateCoord(this,'lon')"/></div>
-      </div>
-      <label>影響半徑 (km)</label>
-      <input type="number" id="evRad" value="0.5" min="0.1" max="50" step="0.1"/>
-      <label>限道路類型（選填，空=全部）</label>
-      <select id="evHW">
-        <option value="">全部道路</option>
-        <option value="motorway">motorway 高速</option>
-        <option value="trunk">trunk 快速</option>
-        <option value="primary">primary 主要</option>
-        <option value="secondary">secondary 次要</option>
-        <option value="tertiary">tertiary 三級</option>
-        <option value="residential">residential 住宅</option>
-      </select>
-      <label>描述</label>
-      <textarea id="evDesc">前方事故，請注意行車安全</textarea>
-      <div class="g2">
-        <button class="pr" onclick="addEvent()">新增事件</button>
-        <button class="dn" onclick="clearEvents()">清空所有</button>
-      </div>
-    </div>
-
-    <!-- Weather -->
-    <div class="card">
-      <div class="card-title">新增天氣影響</div>
-      <div class="row2">
-        <div><label>緯度</label><input type="number" id="wxLat" value="25.0418" step="0.0001"/></div>
-        <div><label>經度</label><input type="number" id="wxLon" value="121.5365" step="0.0001"/></div>
-      </div>
-      <label>影響半徑 (km)（天氣通常 20–100km）</label>
-      <input type="number" id="wxRad" value="50" min="1" max="200"/>
-      <div class="row4" style="margin-top:8px">
-        <div><label>雨</label><input type="number" id="wxRain" value="0.6" min="0" max="1" step="0.1"/></div>
-        <div><label>風</label><input type="number" id="wxWind" value="0.3" min="0" max="1" step="0.1"/></div>
-        <div><label>霧</label><input type="number" id="wxVis" value="0.2" min="0" max="1" step="0.1"/></div>
-        <div><label>特報</label><input type="number" id="wxWarn" value="0" min="0" max="1" step="0.1"/></div>
-      </div>
-      <button class="am" style="margin-top:8px" onclick="addWeather()">套用天氣</button>
-    </div>
-
-    <!-- Recompute -->
-    <div class="card">
-      <div class="card-title">套用動態因子</div>
-      <p style="font-size:11px;color:var(--muted);margin-bottom:8px">新增事件/天氣後需執行此步驟，路徑查詢才會反映動態因子（約需 20 秒）</p>
-      <button class="gn" onclick="recompute()">⚡ 重算 dynamic_cost</button>
-      <div id="dynMsg" class="msg"></div>
-    </div>
-
-    <!-- Route query -->
-    <div class="card">
-      <div class="card-title">路徑查詢</div>
-      <div class="row2">
-        <div><label>起點緯度</label><input type="number" id="sLat" value="25.0418" step="0.000001" oninput="validateCoord(this,'lat')" onchange="updateMarkerFromInput('start')"/></div>
-        <div><label>起點經度</label><input type="number" id="sLon" value="121.5365" step="0.000001" oninput="validateCoord(this,'lon')" onchange="updateMarkerFromInput('start')"/></div>
-        <div><label>終點緯度</label><input type="number" id="eLat" value="22.9908" step="0.000001" oninput="validateCoord(this,'lat')" onchange="updateMarkerFromInput('end')"/></div>
-        <div><label>終點經度</label><input type="number" id="eLon" value="120.2133" step="0.000001" oninput="validateCoord(this,'lon')" onchange="updateMarkerFromInput('end')"/></div>
-      </div>
-      <p style="font-size:11px;color:var(--muted);margin-top:5px">💡 點地圖設定起終點（第1下=起點，第2下=終點）</p>
-      <div class="g3">
-        <button class="pr" onclick="queryRoute()">查詢路徑</button>
-        <button class="sc" onclick="dlTxt()">下載分析</button>
-        <button class="sc" onclick="clearRoute()">清除</button>
-      </div>
-      <div id="routeMsg" class="msg"></div>
-    </div>
-
-    <!-- Results -->
-    <div class="card">
-      <div class="card-title">查詢結果</div>
-      <div class="rg">
-        <div class="rb"><div class="l">總距離</div><div class="v" id="rKm">—</div></div>
-        <div class="rb"><div class="l">預估時間</div><div class="v" id="rMin">—</div></div>
-        <div class="rb"><div class="l">路段數</div><div class="v" id="rEdges">—</div></div>
-        <div class="rb"><div class="l">模式</div><div class="v" id="rMode">—</div></div>
-      </div>
-      <div class="elist" id="elist"></div>
-    </div>
-
-    <!-- Events log -->
-    <div class="card">
-      <div class="card-title">動態因子記錄 <span id="evCount" style="color:var(--accent);font-family:var(--mono);font-size:11px;margin-left:6px"></span></div>
-      <div class="evlog" id="evlog"><span style="font-size:11px;color:var(--muted)">尚無記錄</span></div>
-    </div>
-
-    <!-- Raw preview -->
-    <div class="card">
-      <details>
-        <summary style="cursor:pointer;font-size:12px;color:var(--muted);user-select:none">原始回應</summary>
-        <textarea id="rawPrev" readonly style="height:100px;margin-top:6px;font-family:var(--mono);font-size:10px;color:var(--muted)"></textarea>
-      </details>
-    </div>
+    <div class="suggestions" id="sugStart"></div>
   </div>
-</aside>
 
-<!-- map -->
-<main style="position:relative">
-  <div id="map" style="width:100%;height:100vh"></div>
-  <div class="minfo">
-    <div class="hi" id="clickHint">點地圖 → 設定起點</div>
-    <div style="margin-top:3px">OSM 全路型路網，任意道路類型互通。長程走主幹；短程用完整局部圖。</div>
+  <div class="search-group">
+    <div class="search-row">
+      <input class="search-input" id="inputEnd" placeholder="終點：地址、地標或座標" autocomplete="off"/>
+    </div>
+    <div class="suggestions" id="sugEnd"></div>
   </div>
-  <div class="cbadge" id="cbadge">📍 點地圖設定起點</div>
-</main>
+
+  <div class="mode-pills">
+    <div class="pill" data-mode="fastest" onclick="setMode('fastest')">⚡ 最快</div>
+    <div class="pill active" data-mode="balanced" onclick="setMode('balanced')">⚖ 平衡</div>
+    <div class="pill" data-mode="safest" onclick="setMode('safest')">🛡 安全</div>
+  </div>
+
+  <button class="nav-btn" onclick="navigate()">開始導航</button>
+  <div class="rp-msg" id="rpMsg"></div>
+
+  <div class="rp-footer">
+    <span style="font-size:10px;color:var(--muted)">點地圖設定起終點</span>
+    <a href="/admin">⚙ 管理</a>
+  </div>
+</div>
+
+<!-- Layer Button -->
+<button class="layer-btn" onclick="toggleLayerPanel()">🗂</button>
+<div class="layer-dropdown" id="layerDrop">
+  <div class="ld-item on" onclick="toggleLayer('congestion')">
+    <div class="ld-dot" style="background:#ff4444"></div>
+    <div class="ld-label">車速壅塞</div>
+    <div class="ld-count" id="olCong">—</div>
+  </div>
+  <div class="ld-item on" onclick="toggleLayer('events')">
+    <div class="ld-dot" style="background:#ffb400"></div>
+    <div class="ld-label">交通事件</div>
+    <div class="ld-count" id="olEvt">—</div>
+  </div>
+  <div class="ld-item on" onclick="toggleLayer('weather')">
+    <div class="ld-dot" style="background:#4a9eff"></div>
+    <div class="ld-label">天氣影響</div>
+    <div class="ld-count" id="olWx">—</div>
+  </div>
+</div>
+
+<!-- GPS Button -->
+<button class="gps-btn" id="gpsBtn" onclick="centerGps()">⊕</button>
+
+<!-- Legend -->
+<div class="legend">
+  <b>道路類型</b><br>
+  <span style="color:#00d4ff">━</span> 高速公路<br>
+  <span style="color:#00e5a0">━</span> 快速道路<br>
+  <span style="color:#ffb400">━</span> 主要道路<br>
+  <span style="color:#a78bfa">━</span> 次要道路<br>
+  <span style="color:#6b7280">━</span> 其他
+</div>
+
+<!-- Driving HUD -->
+<div class="drive-hud" id="driveHud">
+  <div class="drive-top">
+    <div class="drive-road" id="driveRoad">—</div>
+    <div class="drive-next">下一段 <span id="driveNext">—</span></div>
+  </div>
+  <button class="drive-recenter" onclick="driveRecenter()">⊕</button>
+  <div class="drive-bottom">
+    <div class="drive-stat"><div class="ds-val" id="driveRemKm">—</div><div class="ds-lbl">剩餘</div></div>
+    <div class="drive-stat"><div class="ds-val" id="driveEta">—</div><div class="ds-lbl">預估到達</div></div>
+    <div class="drive-stat"><div class="ds-val" id="driveSpeed">—</div><div class="ds-lbl">km/h</div></div>
+    <button class="drive-stop" onclick="stopDriving()">■</button>
+  </div>
+</div>
+
+<!-- Result Panel -->
+<div class="result-panel" id="resultPanel">
+  <button class="rp-close" onclick="closeResult()">✕</button>
+  <div class="result-summary" id="resSummary"></div>
+  <ul class="result-steps" id="resSteps"></ul>
+  <div class="result-actions">
+    <button class="ra-btn" onclick="startDriving()" style="background:var(--accent);color:#000;border-color:var(--accent);font-size:14px;padding:10px 20px">▶ 開始行駛</button>
+    <button class="ra-btn" onclick="dlAnalysis()">下載分析</button>
+    <button class="ra-btn" onclick="clearRoute()">清除路線</button>
+  </div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 <script>
-// ── State
+const API_BASE=location.origin;
 let mode='balanced', clickPhase='start';
+let startCoord=null, endCoord=null;
 let startM=null, endM=null, routeL=null, latestRoute=null;
-const evRecords=[];
+let gpsMarker=null, gpsCircle=null, watchId=null, gpsCoord=null;
+let searchTimer=null;
 
-// ── Map
-const map=L.map('map').setView([23.7,121.0],8);
+const map=L.map('map',{zoomControl:false}).setView([23.7,121.0],8);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-  {attribution:'© OpenStreetMap contributors',maxZoom:19}).addTo(map);
+  {attribution:'&copy; OSM',maxZoom:19}).addTo(map);
+L.control.zoom({position:'bottomright'}).addTo(map);
 
-const mkIcon=color=>L.divIcon({className:'',iconAnchor:[7,7],
-  html:`<div style="width:14px;height:14px;background:${color};border:2px solid #fff;border-radius:50%;box-shadow:0 0 8px ${color}"></div>`});
+const mkIcon=color=>L.divIcon({className:'',iconAnchor:[8,8],
+  html:`<div style="width:16px;height:16px;background:${color};border:2.5px solid #fff;border-radius:50%;box-shadow:0 2px 8px ${color}80"></div>`});
 const startIcon=mkIcon('#00e5a0'), endIcon=mkIcon('#ff4444');
 
 map.on('click',e=>{
   const{lat,lng}=e.latlng;
   if(clickPhase==='start'){
-    setMarker('start',lat,lng); clickPhase='end';
-    document.getElementById('clickHint').textContent='點地圖 → 設定終點';
-    document.getElementById('cbadge').textContent='📍 點地圖設定終點';
-    document.getElementById('cbadge').style.color='var(--red)';
-  } else {
-    setMarker('end',lat,lng); clickPhase='start';
-    document.getElementById('clickHint').textContent='點地圖 → 設定起點';
-    document.getElementById('cbadge').textContent='📍 點地圖設定起點';
-    document.getElementById('cbadge').style.color='var(--amber)';
+    setStart(lat,lng,`${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+    clickPhase='end';
+  }else{
+    setEnd(lat,lng,`${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+    clickPhase='start';
   }
 });
 
-function setMarker(type,lat,lng){
-  if(type==='start'){
-    if(startM) map.removeLayer(startM);
-    startM=L.marker([lat,lng],{icon:startIcon}).bindPopup('起點').addTo(map);
-    document.getElementById('sLat').value=lat.toFixed(6);
-    document.getElementById('sLon').value=lng.toFixed(6);
-  } else {
-    if(endM) map.removeLayer(endM);
-    endM=L.marker([lat,lng],{icon:endIcon}).bindPopup('終點').addTo(map);
-    document.getElementById('eLat').value=lat.toFixed(6);
-    document.getElementById('eLon').value=lng.toFixed(6);
-  }
+function setStart(lat,lon,label){
+  startCoord={lat,lon};
+  document.getElementById('inputStart').value=label;
+  if(startM)map.removeLayer(startM);
+  startM=L.marker([lat,lon],{icon:startIcon}).addTo(map).bindPopup('起點');
+}
+function setEnd(lat,lon,label){
+  endCoord={lat,lon};
+  document.getElementById('inputEnd').value=label;
+  if(endM)map.removeLayer(endM);
+  endM=L.marker([lat,lon],{icon:endIcon}).addTo(map).bindPopup('終點');
 }
 
-// ── API
-const api=()=>document.getElementById('apiBase').value.trim().replace(/\/$/,'');
 async function call(path,opts={}){
-  const r=await fetch(api()+path,{headers:{'Content-Type':'application/json'},...opts});
+  const r=await fetch(API_BASE+path,{headers:{'Content-Type':'application/json'},...opts});
   const ct=r.headers.get('content-type')||'';
   const body=ct.includes('json')?await r.json():await r.text();
-  if(!r.ok) throw new Error(typeof body==='string'?`HTTP ${r.status}: ${body}`:(body.detail||`HTTP ${r.status}`));
+  if(!r.ok)throw new Error(typeof body==='string'?`HTTP ${r.status}: ${body}`:(body.detail||`HTTP ${r.status}`));
   return body;
 }
-function msg(id,text,type='info'){const e=document.getElementById(id);e.textContent=text;e.className=`msg ${type}`;e.style.display='block';}
-function hideMsg(id){document.getElementById(id).style.display='none';}
-function loading(show,text='處理中...'){
-  const l=document.getElementById('loader');
-  l.classList.toggle('show',show);
-  if(show) document.getElementById('ltxt').textContent=text;
+function showMsg(text,type='info'){
+  const el=document.getElementById('rpMsg');el.textContent=text;el.className=`rp-msg ${type}`;
+}
+function hideMsg(){document.getElementById('rpMsg').className='rp-msg';}
+function loading(show,text=''){
+  const l=document.getElementById('loader');l.classList.toggle('show',show);
+  if(text)document.getElementById('ltxt').textContent=text;
 }
 
-// ── Connection
 async function ping(){
-  const dot=document.getElementById('dot'),ct=document.getElementById('ctext');
-  dot.className='dot'; ct.className='conn-text'; ct.textContent='連線中...';
-  try{
-    const d=await call('/stats');
-    dot.className='dot on'; ct.className='conn-text on';
-    ct.textContent=`已連線  GL:${d.graph_loaded?'✓':'✗'}`;
-    updateStats(d);
-    if(!d.graph_loaded) msg('sysMsg','⚠ 後端圖尚未載入，請等待啟動完成','err');
-    else hideMsg('sysMsg');
-  } catch(e){
-    dot.className='dot off'; ct.className='conn-text off'; ct.textContent='無法連線';
-  }
-}
-function updateStats(d){
-  document.getElementById('sON').textContent=(d.osm_nodes||'?').toLocaleString();
-  document.getElementById('sOE').textContent=(d.osm_edges||'?').toLocaleString();
-  document.getElementById('sGN').textContent=(d.graph_nodes||'?').toLocaleString();
-  document.getElementById('sGE').textContent=(d.graph_edges||'?').toLocaleString();
-}
-async function fetchStats(){
-  try{const d=await call('/stats');updateStats(d);msg('sysMsg','統計已更新','ok');}
-  catch(e){msg('sysMsg',e.message,'err');}
+  const dot=document.getElementById('connDot');
+  try{await call('/stats');dot.className='rp-dot on';}
+  catch(e){dot.className='rp-dot off';}
 }
 
-// ── Mode
 function setMode(m){
   mode=m;
-  ['fastest','balanced','safest'].forEach(k=>{
-    document.getElementById('m'+k[0]).classList.toggle('on',k===m);
+  document.querySelectorAll('.pill').forEach(p=>p.classList.toggle('active',p.dataset.mode===m));
+}
+
+// Geocoding
+function isCoordStr(s){
+  const m=s.match(/^\s*(-?\d+\.?\d*)\s*[,，\s]\s*(-?\d+\.?\d*)\s*$/);
+  if(!m)return null;
+  const a=parseFloat(m[1]),b=parseFloat(m[2]);
+  if(a>=21.5&&a<=26.5&&b>=118&&b<=122.5)return{lat:a,lon:b};
+  if(b>=21.5&&b<=26.5&&a>=118&&a<=122.5)return{lat:b,lon:a};
+  return null;
+}
+
+function setupSearch(inputId,sugId,onSelect){
+  const input=document.getElementById(inputId);
+  const sugBox=document.getElementById(sugId);
+
+  input.addEventListener('input',()=>{
+    clearTimeout(searchTimer);
+    const q=input.value.trim();
+    if(q.length<2){sugBox.classList.remove('show');return;}
+    const coord=isCoordStr(q);
+    if(coord){
+      sugBox.innerHTML=`<div class="sug-item" data-lat="${coord.lat}" data-lon="${coord.lon}">📍 ${coord.lat.toFixed(5)}, ${coord.lon.toFixed(5)}<span class="sug-src">座標</span></div>`;
+      sugBox.classList.add('show');
+      return;
+    }
+    searchTimer=setTimeout(async()=>{
+      try{
+        const res=await call('/geocode?q='+encodeURIComponent(q));
+        if(!res.length){sugBox.classList.remove('show');return;}
+        sugBox.innerHTML=res.map(r=>
+          `<div class="sug-item" data-lat="${r.lat}" data-lon="${r.lon}">${r.name}<span class="sug-src">${r.source}</span></div>`
+        ).join('');
+        sugBox.classList.add('show');
+      }catch(e){sugBox.classList.remove('show');}
+    },600);
+  });
+
+  input.addEventListener('focus',()=>{if(sugBox.children.length)sugBox.classList.add('show');});
+  input.addEventListener('blur',()=>{setTimeout(()=>sugBox.classList.remove('show'),200);});
+
+  sugBox.addEventListener('click',e=>{
+    const item=e.target.closest('.sug-item');
+    if(!item)return;
+    const lat=parseFloat(item.dataset.lat),lon=parseFloat(item.dataset.lon);
+    const label=item.childNodes[0].textContent.trim();
+    onSelect(lat,lon,label);
+    sugBox.classList.remove('show');
   });
 }
 
-// ── Validate
-function validateCoord(el,type){
-  const v=parseFloat(el.value);
-  const ok=type==='lat'?(v>=21.5&&v<=26.5):(v>=118&&v<=122.5);
-  el.classList.toggle('bad',!ok);
+// GPS
+let gpsError=null;
+function initGps(){
+  if(!navigator.geolocation){gpsError='瀏覽器不支���定位';return;}
+  navigator.geolocation.getCurrentPosition(
+    pos=>onGpsPos(pos),
+    err=>onGpsErr(err),
+    {enableHighAccuracy:true,timeout:10000}
+  );
+  watchId=navigator.geolocation.watchPosition(
+    pos=>onGpsPos(pos),
+    err=>onGpsErr(err),
+    {enableHighAccuracy:true,maximumAge:10000,timeout:15000}
+  );
 }
-function updateMarkerFromInput(type){
-  if(type==='start'){
-    const lat=+document.getElementById('sLat').value, lon=+document.getElementById('sLon').value;
-    if(lat>=21.5&&lat<=26.5&&lon>=118&&lon<=122.5) setMarker('start',lat,lon);
-  } else {
-    const lat=+document.getElementById('eLat').value, lon=+document.getElementById('eLon').value;
-    if(lat>=21.5&&lat<=26.5&&lon>=118&&lon<=122.5) setMarker('end',lat,lon);
+function onGpsPos(pos){
+  const{latitude:lat,longitude:lng,accuracy}=pos.coords;
+  gpsCoord={lat,lon:lng};
+  gpsError=null;
+  if(!gpsMarker){
+    gpsMarker=L.circleMarker([lat,lng],{radius:7,fillColor:'#4a9eff',color:'#fff',weight:2,fillOpacity:1,className:'gps-pulse'}).addTo(map);
+    gpsCircle=L.circle([lat,lng],{radius:accuracy,fillColor:'#4a9eff',color:'#4a9eff',weight:1,fillOpacity:.08,opacity:.2}).addTo(map);
+  }else{
+    gpsMarker.setLatLng([lat,lng]);
+    gpsCircle.setLatLng([lat,lng]).setRadius(accuracy);
   }
+  document.getElementById('gpsBtn').classList.add('tracking');
+  if(driving) onDriveGpsUpdate();
 }
-function checkCoords(){
-  const sl=+document.getElementById('sLat').value,so=+document.getElementById('sLon').value;
-  const el=+document.getElementById('eLat').value,eo=+document.getElementById('eLon').value;
-  if(sl<21.5||sl>26.5||so<118||so>122.5){msg('routeMsg','起點座標超出台灣範圍','err');return false;}
-  if(el<21.5||el>26.5||eo<118||eo>122.5){msg('routeMsg','終點座標超出台灣範圍','err');return false;}
-  return true;
+function onGpsErr(err){
+  document.getElementById('gpsBtn').classList.remove('tracking');
+  if(err.code===1) gpsError='定位權限被拒���，請在瀏覽器允���位置存取';
+  else if(err.code===2) gpsError='無法取得位置（GPS 無訊號）';
+  else gpsError='定位��時，請重試';
 }
-
-// ── Events
-async function addEvent(){
-  const lat=+document.getElementById('evLat').value, lon=+document.getElementById('evLon').value;
-  if(lat<21.5||lat>26.5||lon<118||lon>122.5){msg('dynMsg','事件座標超出台灣範圍','err');return;}
-  const payload={event_type:document.getElementById('evType').value,
-    severity:+document.getElementById('evSev').value,
-    lat,lon,radius_km:+document.getElementById('evRad').value,
-    description:document.getElementById('evDesc').value};
-  const hw=document.getElementById('evHW').value;
-  if(hw) payload.highway=hw;
-  try{
-    const d=await call('/events',{method:'POST',body:JSON.stringify(payload)});
-    evRecords.push({kind:'⚠ '+payload.event_type,text:`${payload.lat.toFixed(3)},${payload.lon.toFixed(3)} r=${payload.radius_km}km sev=${payload.severity}`});
-    renderEvLog();
-    msg('dynMsg',`已新增事件（${d.event_id}）。記得執行「重算 dynamic_cost」！`,'ok');
-    document.getElementById('rawPrev').value=JSON.stringify(d,null,2);
-  }catch(e){msg('dynMsg',e.message,'err');}
-}
-async function clearEvents(){
-  if(!confirm('清空所有事件與天氣？')) return;
-  try{
-    await call('/events',{method:'DELETE'});
-    evRecords.length=0; renderEvLog();
-    msg('dynMsg','已清空，請重算 dynamic_cost','ok');
-  }catch(e){msg('dynMsg',e.message,'err');}
-}
-async function addWeather(){
-  const payload={lat:+document.getElementById('wxLat').value,lon:+document.getElementById('wxLon').value,
-    radius_km:+document.getElementById('wxRad').value,
-    rain_level:+document.getElementById('wxRain').value,
-    wind_level:+document.getElementById('wxWind').value,
-    visibility_level:+document.getElementById('wxVis').value,
-    warning_level:+document.getElementById('wxWarn').value};
-  try{
-    const d=await call('/weather',{method:'POST',body:JSON.stringify(payload)});
-    evRecords.push({kind:'🌧 天氣',text:`r=${payload.radius_km}km 雨${payload.rain_level} 風${payload.wind_level}`});
-    renderEvLog();
-    msg('dynMsg','天氣已新增。記得執行「重算 dynamic_cost」！','ok');
-    document.getElementById('rawPrev').value=JSON.stringify(d,null,2);
-  }catch(e){msg('dynMsg',e.message,'err');}
-}
-async function recompute(){
-  loading(true,'重算 dynamic_cost（約 20 秒）...');
-  msg('dynMsg','重算中...','info');
-  try{
-    const d=await call('/dynamic/recompute',{method:'POST',body:JSON.stringify({mode})});
-    msg('dynMsg',`重算完成（${mode} 模式）。路徑查詢已反映最新因子。`,'ok');
-    document.getElementById('rawPrev').value=JSON.stringify(d,null,2);
-    updateStats(d.stats||{});
-  }catch(e){msg('dynMsg',e.message,'err');}
-  finally{loading(false);}
-}
-function renderEvLog(){
-  const el=document.getElementById('evlog');
-  document.getElementById('evCount').textContent=evRecords.length?`(${evRecords.length})`:'';
-  if(!evRecords.length){el.innerHTML='<span style="font-size:11px;color:var(--muted)">尚無記錄</span>';return;}
-  el.innerHTML=evRecords.slice().reverse().map(r=>
-    `<div class="evrow"><span>${r.kind}</span> ${r.text}</div>`).join('');
+function centerGps(){
+  if(gpsCoord){map.setView([gpsCoord.lat,gpsCoord.lon],15);return;}
+  if(gpsError){showMsg(gpsError,'err');return;}
+  showMsg('定位���，請稍候...','info');
+  navigator.geolocation.getCurrentPosition(
+    pos=>{onGpsPos(pos);map.setView([gpsCoord.lat,gpsCoord.lon],15);hideMsg();},
+    err=>{onGpsErr(err);showMsg(gpsError,'err');},
+    {enableHighAccuracy:true,timeout:10000}
+  );
 }
 
-// ── Route
-async function queryRoute(){
-  if(!checkCoords()) return;
-  clearRoute(false);
-  msg('routeMsg','A* 搜尋中...（長程可能需要 5–10 秒）','info');
-  loading(true,'A* 路徑搜尋中...');
-  const payload={start_lat:+document.getElementById('sLat').value,
-    start_lon:+document.getElementById('sLon').value,
-    end_lat:+document.getElementById('eLat').value,
-    end_lon:+document.getElementById('eLon').value, mode};
+document.getElementById('btnGpsStart').addEventListener('click',()=>{
+  if(gpsCoord){setStart(gpsCoord.lat,gpsCoord.lon,'📍 目前位置');return;}
+  if(gpsError){showMsg(gpsError,'err');return;}
+  showMsg('正在取得位置...','info');
+  navigator.geolocation.getCurrentPosition(
+    pos=>{onGpsPos(pos);setStart(gpsCoord.lat,gpsCoord.lon,'📍 目前位置');hideMsg();},
+    err=>{onGpsErr(err);showMsg(gpsError,'err');},
+    {enableHighAccuracy:true,timeout:10000}
+  );
+});
+
+// Navigate
+async function navigate(){
+  hideMsg();
+  if(!startCoord){showMsg('請設定起點','err');return;}
+  if(!endCoord){showMsg('請設定終點','err');return;}
+  const{lat:sLat,lon:sLon}=startCoord,{lat:eLat,lon:eLon}=endCoord;
+  if(sLat<21.5||sLat>26.5||sLon<118||sLon>122.5){showMsg('起點超出台灣範圍','err');return;}
+  if(eLat<21.5||eLat>26.5||eLon<118||eLon>122.5){showMsg('終點超出台灣範圍','err');return;}
+
+  loading(true,'A* 路徑計算中...');
   try{
-    const d=await call('/route',{method:'POST',body:JSON.stringify(payload)});
+    const d=await call('/route',{method:'POST',body:JSON.stringify({
+      start_lat:sLat,start_lon:sLon,end_lat:eLat,end_lon:eLon,mode
+    })});
     latestRoute=d;
-    document.getElementById('rawPrev').value=JSON.stringify({ok:d.ok,total_km:d.total_km,total_min:d.total_min,num_edges:d.num_edges,mode:d.mode,start_node:d.start_node,end_node:d.end_node},null,2);
-    renderRouteResult(d);
-    msg('routeMsg',`✓ ${d.total_km.toFixed(2)} km · ${d.total_min.toFixed(0)} 分鐘 · ${d.num_edges} 路段`,'ok');
-  }catch(e){
-    msg('routeMsg',e.message,'err');
-    if(e.message.includes('主幹路網')) msg('routeMsg',e.message+'\n→ 請嘗試更靠近主要道路的座標','err');
-  }
+    renderRoute(d);
+    showMsg(`${d.total_km.toFixed(1)} km · ${d.total_min.toFixed(0)} 分鐘`,'ok');
+  }catch(e){showMsg(e.message,'err');}
   finally{loading(false);}
 }
-function renderRouteResult(d){
-  document.getElementById('rKm').textContent=d.total_km?.toFixed(2)+' km';
-  document.getElementById('rMin').textContent=d.total_min?.toFixed(0)+' min';
-  document.getElementById('rEdges').textContent=d.num_edges||'—';
-  document.getElementById('rMode').textContent=d.mode||'—';
-  const list=document.getElementById('elist');
-  // Show highway type groups
-  const hwMap={};
-  (d.edges||[]).forEach(e=>{const hw=e.highway||'other';hwMap[hw]=(hwMap[hw]||0)+1;});
-  const hwSummary=Object.entries(hwMap).sort((a,b)=>b[1]-a[1]).map(([hw,n])=>`${hw}(${n})`).join(' · ');
-  
-  // Build edge list (merge same-name consecutive)
-  const merged=[];
-  let prev=null,km=0,mn=0;
-  (d.edges||[]).forEach(e=>{
-    const nm=e.name||e.highway||'—';
-    if(nm===prev){km+=e.length_km||0;mn+=e.travel_min||0;}
-    else{if(prev) merged.push({nm:prev,km,mn,hw:e.highway});prev=nm;km=e.length_km||0;mn=e.travel_min||0;}
-  });
-  if(prev) merged.push({nm:prev,km,mn});
-  
-  list.innerHTML=`<div style="font-size:10px;color:var(--purple);font-family:var(--mono);margin-bottom:5px">${hwSummary}</div>`
-    +merged.slice(0,40).map((s,i)=>
-    `<div class="ei"><div class="n">${String(i+1).padStart(2,'0')}. ${s.nm}</div>
-    <div class="m">${s.km.toFixed(2)} km · ${s.mn.toFixed(1)} min</div></div>`).join('');
-  
+
+function renderRoute(d){
+  if(routeL){map.removeLayer(routeL);routeL=null;}
   if(d.geojson?.features?.length){
-    if(routeL) map.removeLayer(routeL);
-    // Color by highway type
     routeL=L.geoJSON(d.geojson,{
       style:f=>{
         const hw=f.properties?.highway||'';
@@ -586,175 +534,247 @@ function renderRouteResult(d){
       },
       onEachFeature:(f,layer)=>{
         const p=f.properties||{};
-        layer.bindPopup(`<b>${p.name||p.highway||'—'}</b><br><span style="color:#666">[${p.highway}] ${(p.length_km||0).toFixed(3)} km · ${(p.speed_kmh||0)} km/h</span>`);
+        layer.bindPopup(`<b>${p.name||p.highway||'—'}</b><br>${(p.length_km||0).toFixed(2)} km`);
       }
     }).addTo(map);
     const b=routeL.getBounds();
-    if(b.isValid()) map.fitBounds(b.pad(.08));
+    if(b.isValid())map.fitBounds(b.pad(.08));
   }
+
+  const modeLabel={'fastest':'最快','balanced':'平衡','safest':'安全'}[d.mode]||d.mode;
+  document.getElementById('resSummary').innerHTML=
+    `<span class="rs-big">${d.total_km.toFixed(1)} km</span>
+     <span class="rs-big">${d.total_min.toFixed(0)} 分鐘</span>
+     <span class="rs-sub">${modeLabel}路線 · ${d.num_edges} 路段</span>`;
+
+  const merged=[];
+  let prev=null,km=0,mn=0;
+  (d.edges||[]).forEach(e=>{
+    const nm=e.name||e.highway||'—';
+    if(nm===prev){km+=e.length_km||0;mn+=e.travel_min||0;}
+    else{if(prev)merged.push({nm:prev,km,mn});prev=nm;km=e.length_km||0;mn=e.travel_min||0;}
+  });
+  if(prev)merged.push({nm:prev,km,mn});
+
+  document.getElementById('resSteps').innerHTML=merged.slice(0,30).map((s,i)=>
+    `<li><div class="step-icon">${i+1}</div><span class="step-name">${s.nm}</span><span class="step-dist">${s.km.toFixed(1)} km</span></li>`
+  ).join('');
+
+  document.getElementById('resultPanel').classList.add('show');
 }
-function clearRoute(clearMsg_=true){
+
+function closeResult(){document.getElementById('resultPanel').classList.remove('show');}
+function clearRoute(){
+  if(driving) stopDriving();
   if(routeL){map.removeLayer(routeL);routeL=null;}
   latestRoute=null;
-  document.getElementById('elist').innerHTML='';
-  ['rKm','rMin','rEdges','rMode'].forEach(id=>document.getElementById(id).textContent='—');
-  if(clearMsg_) hideMsg('routeMsg');
+  document.getElementById('resultPanel').classList.remove('show');
+  hideMsg();
 }
-function dlTxt(){
-  if(!latestRoute?.analysis_text){msg('routeMsg','請先查詢路徑','err');return;}
+function dlAnalysis(){
+  if(!latestRoute?.analysis_text){showMsg('無分析資料','err');return;}
   const a=Object.assign(document.createElement('a'),{
     href:URL.createObjectURL(new Blob([latestRoute.analysis_text],{type:'text/plain;charset=utf-8'})),
-    download:`route_osm_${new Date().toISOString().replace(/[:.]/g,'-')}.txt`});
+    download:`route_${new Date().toISOString().slice(0,10)}.txt`});
   document.body.appendChild(a);a.click();a.remove();
-  msg('routeMsg','已下載路徑分析報告','ok');
 }
 
-// ── Legend
-function addLegend(){
-  const div=L.control({position:'bottomright'});
-  div.onAdd=()=>{
-    const d=document.createElement('div');
-    d.style.cssText='background:rgba(6,13,26,.88);border:1px solid #192c47;border-radius:8px;padding:8px 12px;font-size:11px;color:#4a6d99;font-family:monospace;line-height:1.8';
-    d.innerHTML=['<b style="color:#cde4f5">道路類型</b>',
-      '<span style="color:#00d4ff">━</span> motorway 高速公路',
-      '<span style="color:#00e5a0">━</span> trunk 快速道路',
-      '<span style="color:#ffb400">━</span> primary 主要道路',
-      '<span style="color:#a78bfa">━</span> secondary 次要道路',
-      '<span style="color:#6b7280">━</span> tertiary 三級/其他'].join('<br>');
-    return d;
-  };
-  div.addTo(map);
+// ── Driving Mode
+let driving=false, driveFollowing=true, driveEdges=[], driveEdgeIdx=0;
+let lastGpsTime=0, lastGpsCoord=null, currentSpeed=0;
+
+function buildDriveEdges(){
+  if(!latestRoute?.edges) return[];
+  const merged=[];
+  let prev=null,km=0,mn=0;
+  for(const e of latestRoute.edges){
+    const nm=e.name||e.highway||'—';
+    if(nm===prev){km+=e.length_km||0;mn+=e.travel_min||0;}
+    else{if(prev!==null)merged.push({nm:prev,km,mn});prev=nm;km=e.length_km||0;mn=e.travel_min||0;}
+  }
+  if(prev!==null)merged.push({nm:prev,km,mn});
+  return merged;
 }
 
-// ── Sync Status
-async function fetchSyncStatus(){
-  try{
-    const d=await call('/sync/status');
-    const card=document.getElementById('syncCard');
-    if(!d.enabled){card.style.display='none';return;}
-    card.style.display='block';
-    const dot=document.getElementById('syncDot');
-    dot.style.background=d.last_sync_ok?'var(--green)':d.last_sync_ok===false?'var(--red)':'var(--muted)';
-    const okEl=document.getElementById('syncOk');
-    okEl.textContent=d.last_sync_ok?'OK':d.last_sync_ok===false?'Error':'—';
-    okEl.style.color=d.last_sync_ok?'var(--green)':d.last_sync_ok===false?'var(--red)':'var(--muted)';
-    document.getElementById('syncSpeed').textContent=d.tdx_speed_count??'—';
-    document.getElementById('syncInc').textContent=d.tdx_incident_count??'—';
-    document.getElementById('syncWx').textContent=d.cwa_station_count??'—';
-    if(d.last_sync_time){
-      const t=new Date(d.last_sync_time);
-      document.getElementById('syncTime').textContent=t.toLocaleTimeString('zh-TW');
+function startDriving(){
+  if(!latestRoute){showMsg('請先查詢路線','err');return;}
+  if(!gpsCoord){showMsg('需要 GPS 定位才能行駛','err');return;}
+  driveEdges=buildDriveEdges();
+  if(!driveEdges.length)return;
+  driveEdgeIdx=0;
+  driving=true;
+  driveFollowing=true;
+  document.body.classList.add('driving');
+  map.setView([gpsCoord.lat,gpsCoord.lon],16);
+  updateDriveHud();
+}
+
+function stopDriving(){
+  driving=false;
+  driveFollowing=true;
+  driveEdgeIdx=0;
+  driveEdges=[];
+  currentSpeed=0;
+  lastGpsCoord=null;
+  lastGpsTime=0;
+  document.body.classList.remove('driving');
+  if(routeL){const b=routeL.getBounds();if(b.isValid())map.fitBounds(b.pad(.08));}
+  else map.setZoom(12);
+}
+
+function driveRecenter(){
+  driveFollowing=true;
+  if(gpsCoord)map.setView([gpsCoord.lat,gpsCoord.lon],16);
+}
+
+function distBetween(lat1,lon1,lat2,lon2){
+  const R=6371,dLat=(lat2-lat1)*Math.PI/180,dLon=(lon2-lon1)*Math.PI/180;
+  const a=Math.sin(dLat/2)**2+Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
+  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+}
+
+function findCurrentEdge(lat,lon){
+  if(!latestRoute?.edges?.length)return 0;
+  let bestIdx=0, bestDist=Infinity;
+  const rawEdges=latestRoute.edges;
+  const merged=driveEdges;
+  let mIdx=0;
+  for(let i=0;i<rawEdges.length;i++){
+    const e=rawEdges[i];
+    const eLat=e.lat_a||lat, eLon=e.lon_a||lon;
+    const d=distBetween(lat,lon,eLat,eLon);
+    const nm=e.name||e.highway||'—';
+    if(mIdx<merged.length&&merged[mIdx].nm===nm){
+      if(d<bestDist){bestDist=d;bestIdx=mIdx;}
     }
-    if(d.next_sync_time){
-      const t=new Date(d.next_sync_time);
-      document.getElementById('syncNext').textContent=t.toLocaleTimeString('zh-TW');
+    if(i<rawEdges.length-1){
+      const next=rawEdges[i+1];
+      const nextNm=next.name||next.highway||'—';
+      if(nextNm!==nm)mIdx++;
     }
-    if(d.last_error) msg('syncMsg',d.last_error,'err');
-    else hideMsg('syncMsg');
-  }catch(e){/* sync not available */}
-}
-async function triggerSync(){
-  try{
-    msg('syncMsg','同步中...','info');
-    await call('/sync/trigger',{method:'POST'});
-    msg('syncMsg','已觸發同步，稍後更新狀態','ok');
-    setTimeout(fetchSyncStatus,5000);
-  }catch(e){msg('syncMsg',e.message,'err');}
+  }
+  return bestIdx;
 }
 
-// ── Overlay Layers
+function updateDriveHud(){
+  if(!driving||!driveEdges.length)return;
+  const cur=driveEdges[driveEdgeIdx]||driveEdges[0];
+  const next=driveEdges[driveEdgeIdx+1];
+
+  document.getElementById('driveRoad').textContent=cur.nm;
+  document.getElementById('driveNext').textContent=next?`${next.nm}（${next.km.toFixed(1)} km）`:'即將到達終點';
+
+  let remKm=0,remMin=0;
+  for(let i=driveEdgeIdx;i<driveEdges.length;i++){
+    remKm+=driveEdges[i].km;
+    remMin+=driveEdges[i].mn;
+  }
+  document.getElementById('driveRemKm').textContent=remKm>=1?`${remKm.toFixed(1)} km`:`${(remKm*1000).toFixed(0)} m`;
+
+  const now=new Date();
+  const eta=new Date(now.getTime()+remMin*60000);
+  document.getElementById('driveEta').textContent=eta.toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'});
+  document.getElementById('driveSpeed').textContent=Math.round(currentSpeed);
+}
+
+function onDriveGpsUpdate(){
+  if(!driving)return;
+  const now=Date.now();
+  if(lastGpsCoord&&lastGpsTime){
+    const dt=(now-lastGpsTime)/1000;
+    if(dt>0){
+      const d=distBetween(lastGpsCoord.lat,lastGpsCoord.lon,gpsCoord.lat,gpsCoord.lon);
+      currentSpeed=d/dt*3600;
+      if(currentSpeed>200)currentSpeed=0;
+    }
+  }
+  lastGpsCoord={...gpsCoord};
+  lastGpsTime=now;
+
+  if(latestRoute?.geojson){
+    const newIdx=findCurrentEdge(gpsCoord.lat,gpsCoord.lon);
+    if(newIdx>=driveEdgeIdx)driveEdgeIdx=newIdx;
+  }
+
+  if(driveFollowing)map.setView([gpsCoord.lat,gpsCoord.lon],Math.max(map.getZoom(),15));
+
+  if(driveEdgeIdx>=driveEdges.length-1){
+    const endEdge=driveEdges[driveEdges.length-1];
+    if(endCoord){
+      const distToEnd=distBetween(gpsCoord.lat,gpsCoord.lon,endCoord.lat,endCoord.lon);
+      if(distToEnd<0.05){
+        document.getElementById('driveRoad').textContent='已到達目的地';
+        document.getElementById('driveNext').textContent='';
+        document.getElementById('driveRemKm').textContent='0';
+        document.getElementById('driveEta').textContent='--:--';
+        return;
+      }
+    }
+  }
+  updateDriveHud();
+}
+
+map.on('dragstart',()=>{if(driving)driveFollowing=false;});
+
+// Layers
 const overlayState={congestion:true,events:true,weather:true};
 const overlayGroups={congestion:L.layerGroup().addTo(map),events:L.layerGroup().addTo(map),weather:L.layerGroup().addTo(map)};
 
+function toggleLayerPanel(){document.getElementById('layerDrop').classList.toggle('show');}
 function toggleLayer(name){
   overlayState[name]=!overlayState[name];
-  const el=event.currentTarget;
-  el.classList.toggle('on',overlayState[name]);
-  if(overlayState[name]) map.addLayer(overlayGroups[name]);
-  else map.removeLayer(overlayGroups[name]);
+  event.currentTarget.classList.toggle('on',overlayState[name]);
+  if(overlayState[name])map.addLayer(overlayGroups[name]);else map.removeLayer(overlayGroups[name]);
 }
-
 function sevColor(sev){
-  if(sev>=0.8) return '#ff2222';
-  if(sev>=0.6) return '#ff6600';
-  if(sev>=0.4) return '#ffaa00';
-  if(sev>=0.2) return '#ffdd00';
-  return '#88cc00';
+  if(sev>=0.8)return'#ff2222';if(sev>=0.6)return'#ff6600';
+  if(sev>=0.4)return'#ffaa00';if(sev>=0.2)return'#ffdd00';return'#88cc00';
 }
-
 const evtColors={accident:'#ff4444',construction:'#ffb400',closure:'#cc0000',congestion:'#ff6600',manual:'#a78bfa'};
 
 async function loadOverlays(){
   try{
-    const [events,weather]=await Promise.all([call('/events'),call('/weather')]);
-    overlayGroups.congestion.clearLayers();
-    overlayGroups.events.clearLayers();
-    overlayGroups.weather.clearLayers();
-    let cCong=0,cEvt=0;
-
+    const[events,weather]=await Promise.all([call('/events'),call('/weather')]);
+    overlayGroups.congestion.clearLayers();overlayGroups.events.clearLayers();overlayGroups.weather.clearLayers();
+    let cC=0,cE=0;
     for(const ev of events){
       const lat=+ev.lat,lon=+ev.lon,sev=+ev.severity||0.5,rad=(+ev.radius_km||0.5)*1000;
-      if(!lat||!lon) continue;
-      const src=ev.source||'manual';
-      const typ=ev.event_type||'manual';
-
-      if(typ==='congestion'&&src==='realtime'){
-        cCong++;
-        L.circleMarker([lat,lon],{radius:5,fillColor:sevColor(sev),color:'rgba(0,0,0,.3)',weight:1,fillOpacity:0.8})
-          .bindPopup(`<b>壅塞</b> severity=${sev.toFixed(2)}<br><span style="color:#888">${ev.description||''}</span>`)
-          .addTo(overlayGroups.congestion);
-      } else {
-        cEvt++;
-        const col=evtColors[typ]||'#a78bfa';
-        L.circle([lat,lon],{radius:rad,fillColor:col,color:col,weight:2,fillOpacity:0.2,opacity:0.6})
-          .bindPopup(`<b>${typ}</b> sev=${sev.toFixed(2)}<br>r=${(rad/1000).toFixed(1)}km<br><span style="color:#888">${ev.description||''}</span>`)
-          .addTo(overlayGroups.events);
-        L.circleMarker([lat,lon],{radius:6,fillColor:col,color:'#fff',weight:2,fillOpacity:0.9})
-          .addTo(overlayGroups.events);
+      if(!lat||!lon)continue;
+      if(ev.event_type==='congestion'&&ev.source==='realtime'){
+        cC++;
+        L.circleMarker([lat,lon],{radius:4,fillColor:sevColor(sev),color:'rgba(0,0,0,.3)',weight:1,fillOpacity:.8})
+          .bindPopup(`壅塞 sev=${sev.toFixed(2)}`).addTo(overlayGroups.congestion);
+      }else{
+        cE++;const col=evtColors[ev.event_type]||'#a78bfa';
+        L.circle([lat,lon],{radius:rad,fillColor:col,color:col,weight:1.5,fillOpacity:.15,opacity:.5})
+          .bindPopup(`${ev.event_type} sev=${sev.toFixed(2)}`).addTo(overlayGroups.events);
       }
     }
-
-    let cWx=0;
+    let cW=0;
     for(const wx of weather){
       const lat=+wx.lat,lon=+wx.lon,rad=(+wx.radius_km||30)*1000;
       const rain=+wx.rain_level||0,wind=+wx.wind_level||0,vis=+wx.visibility_level||0;
-      const maxLvl=Math.max(rain,wind,vis);
-      if(maxLvl<0.01) continue;
-      cWx++;
-      let col='#4a9eff',label='';
-      if(rain>=wind&&rain>=vis){col='#2288ff';label=`雨=${rain.toFixed(2)}`;}
-      else if(wind>=vis){col='#44bb88';label=`風=${wind.toFixed(2)}`;}
-      else{col='#888888';label=`霧=${vis.toFixed(2)}`;}
-      L.circle([lat,lon],{radius:rad,fillColor:col,color:col,weight:1,fillOpacity:Math.min(0.15,maxLvl*0.2),opacity:0.3})
-        .bindPopup(`<b>天氣</b><br>雨=${rain.toFixed(2)} 風=${wind.toFixed(2)} 霧=${vis.toFixed(2)}<br>半徑=${(rad/1000).toFixed(0)}km`)
+      const mx=Math.max(rain,wind,vis);if(mx<0.01)continue;cW++;
+      const col=rain>=wind&&rain>=vis?'#2288ff':wind>=vis?'#44bb88':'#888';
+      L.circle([lat,lon],{radius:rad,fillColor:col,color:col,weight:1,fillOpacity:Math.min(.12,mx*.15),opacity:.25})
         .addTo(overlayGroups.weather);
     }
-
-    document.getElementById('olCong').textContent=cCong;
-    document.getElementById('olEvt').textContent=cEvt;
-    document.getElementById('olWx').textContent=cWx;
-  }catch(e){console.error('loadOverlays',e);}
+    document.getElementById('olCong').textContent=cC;
+    document.getElementById('olEvt').textContent=cE;
+    document.getElementById('olWx').textContent=cW;
+  }catch(e){}
 }
 
-function clearOverlays(){
-  overlayGroups.congestion.clearLayers();
-  overlayGroups.events.clearLayers();
-  overlayGroups.weather.clearLayers();
-  document.getElementById('olCong').textContent='—';
-  document.getElementById('olEvt').textContent='—';
-  document.getElementById('olWx').textContent='—';
-}
+document.addEventListener('click',e=>{
+  if(!e.target.closest('.layer-btn')&&!e.target.closest('.layer-dropdown'))
+    document.getElementById('layerDrop').classList.remove('show');
+});
 
-// ── Init
-setMarker('start',25.0418,121.5365);
-setMarker('end',22.9908,120.2133);
-addLegend();
-ping();
-fetchSyncStatus();
-loadOverlays();
-setInterval(ping,30000);
-setInterval(fetchSyncStatus,30000);
-setInterval(loadOverlays,60000);
+// Init
+setupSearch('inputStart','sugStart',(lat,lon,label)=>setStart(lat,lon,label));
+setupSearch('inputEnd','sugEnd',(lat,lon,label)=>setEnd(lat,lon,label));
+ping();initGps();loadOverlays();
+setInterval(ping,30000);setInterval(loadOverlays,60000);
 </script>
 </body>
 </html>

@@ -1,0 +1,12 @@
+*.db
+*.db-wal
+*.db-shm
+*.pbf
+.env
+.git
+__pycache__
+*.pyc
+cf_*.txt
+ngrok_*.txt
+CLAUDE.md
+README.md

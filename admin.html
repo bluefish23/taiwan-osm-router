@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>台灣 OSM 管理儀表板</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500&family=Barlow+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<style>
+:root{
+  --bg:#060d1a;--surf:#0b1628;--surf2:#101f35;--border:#192c47;
+  --accent:#00d4ff;--acc2:#0099cc;--green:#00e5a0;--amber:#ffb400;
+  --red:#ff4444;--purple:#a78bfa;--text:#cde4f5;--muted:#4a6d99;
+  --mono:'JetBrains Mono',monospace;--sans:'Barlow',sans-serif;--cond:'Barlow Condensed',sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14px;height:100vh;overflow:hidden}
+.layout{display:grid;grid-template-columns:370px 1fr;height:100vh}
+
+.sidebar{display:flex;flex-direction:column;background:var(--surf);border-right:1px solid var(--border);overflow:hidden}
+.topbar{background:var(--bg);border-bottom:1px solid var(--border);padding:8px 14px;display:flex;align-items:center;gap:8px;flex-shrink:0}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex-shrink:0;transition:.3s}
+.dot.on{background:var(--green);box-shadow:0 0 7px var(--green)}
+.dot.off{background:var(--red)}
+.conn-text{font-family:var(--mono);font-size:11px;color:var(--muted);flex:1}
+.conn-text.on{color:var(--green)}.conn-text.off{color:var(--red)}
+.api-in{background:var(--surf2);border:1px solid var(--border);border-radius:5px;padding:4px 8px;
+  font-family:var(--mono);font-size:11px;color:var(--accent);width:160px;outline:none}
+.api-in:focus{border-color:var(--accent)}
+.nav-link{font-size:11px;color:var(--muted);text-decoration:none;white-space:nowrap}
+.nav-link:hover{color:var(--accent)}
+
+.brand{padding:14px 16px 10px;border-bottom:1px solid var(--border);flex-shrink:0}
+.brand h1{font-family:var(--cond);font-size:20px;font-weight:700;color:var(--amber);letter-spacing:.5px}
+.brand p{font-size:11px;color:var(--muted);margin-top:2px}
+
+.scroll{flex:1;overflow-y:auto;padding:10px}
+.scroll::-webkit-scrollbar{width:3px}
+.scroll::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+
+.card{background:var(--surf2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px}
+.card-title{font-family:var(--cond);font-size:12px;font-weight:600;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.8px;margin-bottom:10px}
+
+.sg{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.sb{background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:9px 10px}
+.sb .l{font-size:11px;color:var(--muted);margin-bottom:2px}
+.sb .v{font-family:var(--mono);font-size:16px;font-weight:500;color:var(--text)}
+
+label{display:block;font-size:12px;color:var(--muted);margin:8px 0 3px}
+label:first-child{margin-top:0}
+input,select,textarea{width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;
+  padding:7px 9px;font-family:var(--sans);font-size:13px;color:var(--text);outline:none;transition:.15s}
+input:focus,select:focus,textarea:focus{border-color:var(--accent)}
+input.bad{border-color:var(--red)!important}
+textarea{resize:vertical;min-height:46px;font-size:12px}
+select option{background:var(--surf2)}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.row4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px}
+
+button{border:none;border-radius:6px;padding:8px 12px;font-family:var(--cond);
+  font-size:13px;font-weight:600;cursor:pointer;letter-spacing:.2px;transition:.15s;width:100%}
+.pr{background:var(--accent);color:#000}.pr:hover{background:var(--acc2)}
+.sc{background:var(--border);color:var(--text)}.sc:hover{background:#243550}
+.dn{background:#2a1010;color:var(--red);border:1px solid #4a2020}.dn:hover{background:#3a1515}
+.gn{background:#002e1f;color:var(--green);border:1px solid #004d35}.gn:hover{background:#003d28}
+.am{background:#2a1e00;color:var(--amber);border:1px solid #4a3600}.am:hover{background:#3a2800}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px}
+
+.msg{font-size:12px;margin-top:7px;padding:5px 9px;border-radius:5px;
+  line-height:1.5;font-family:var(--mono);display:none}
+.msg.ok{background:#001f14;color:var(--green);border:1px solid #00402a}
+.msg.err{background:#200000;color:var(--red);border:1px solid #500000}
+.msg.info{background:#001428;color:var(--accent);border:1px solid #003355}
+
+.evlog{max-height:120px;overflow-y:auto;margin-top:6px}
+.evrow{border-left:2px solid var(--purple);padding:4px 7px;margin-bottom:4px;font-size:11px;color:var(--muted)}
+.evrow span{color:var(--text);font-weight:500}
+
+.otoggle{display:flex;align-items:center;gap:8px;padding:6px 0;cursor:pointer;user-select:none}
+.otoggle .odot{width:12px;height:12px;border-radius:3px;flex-shrink:0;border:1px solid rgba(255,255,255,.2)}
+.otoggle .olbl{font-size:12px;color:var(--muted);flex:1}
+.otoggle .ocnt{font-family:var(--mono);font-size:11px;color:var(--accent)}
+.otoggle.on .olbl{color:var(--text)}
+
+.minfo{position:absolute;right:12px;top:12px;z-index:500;
+  background:rgba(6,13,26,.92);backdrop-filter:blur(8px);border:1px solid var(--border);
+  border-radius:9px;padding:9px 13px;font-size:12px;color:var(--muted);max-width:210px;line-height:1.6}
+.cbadge{position:absolute;left:12px;bottom:20px;z-index:500;
+  background:rgba(6,13,26,.9);border:1px solid var(--border);border-radius:6px;
+  padding:5px 11px;font-family:var(--mono);font-size:11px;color:var(--amber)}
+
+#loader{display:none;position:fixed;inset:0;background:rgba(6,13,26,.8);z-index:999;
+  align-items:center;justify-content:center;flex-direction:column;gap:14px}
+#loader.show{display:flex}
+.spin{width:40px;height:40px;border:3px solid var(--border);border-top-color:var(--accent);
+  border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.ltxt{font-family:var(--cond);font-size:16px;color:var(--accent)}
+
+@media(max-width:900px){
+  .layout{grid-template-columns:1fr}
+  .sidebar{height:60vh;overflow-y:auto}
+  body{overflow:auto;height:auto}
+  #map{height:40vh!important}
+}
+</style>
+</head>
+<body>
+<div id="loader"><div class="spin"></div><div class="ltxt" id="ltxt">載入中...</div></div>
+
+<div class="layout">
+<aside class="sidebar">
+  <div class="topbar">
+    <div class="dot" id="dot"></div>
+    <span class="conn-text" id="ctext">未連線</span>
+    <input class="api-in" id="apiBase" onchange="ping()"/>
+    <a href="/app" class="nav-link">← 導航</a>
+  </div>
+  <div class="brand">
+    <h1>管理儀表板</h1>
+    <p>事件/天氣管理 · 同步控制 · 路網統計</p>
+  </div>
+
+  <div class="scroll">
+    <div class="card">
+      <div class="card-title">路網統計</div>
+      <div class="sg">
+        <div class="sb"><div class="l">OSM 節點</div><div class="v" id="sON">—</div></div>
+        <div class="sb"><div class="l">OSM 邊</div><div class="v" id="sOE">—</div></div>
+        <div class="sb"><div class="l">已載入節點</div><div class="v" id="sGN">—</div></div>
+        <div class="sb"><div class="l">已載入邊</div><div class="v" id="sGE">—</div></div>
+      </div>
+      <div class="g2">
+        <button class="sc" onclick="fetchStats()">更新統計</button>
+        <button class="sc" onclick="ping()">測試連線</button>
+      </div>
+      <div id="sysMsg" class="msg"></div>
+    </div>
+
+    <div class="card" id="syncCard" style="display:none">
+      <div class="card-title">即時資料同步
+        <span id="syncDot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted);margin-left:6px;vertical-align:middle"></span>
+      </div>
+      <div class="sg">
+        <div class="sb"><div class="l">上次同步</div><div class="v" id="syncTime">—</div></div>
+        <div class="sb"><div class="l">狀態</div><div class="v" id="syncOk">—</div></div>
+        <div class="sb"><div class="l">車速偵測</div><div class="v" id="syncSpeed">—</div></div>
+        <div class="sb"><div class="l">路況事件</div><div class="v" id="syncInc">—</div></div>
+        <div class="sb"><div class="l">氣象站</div><div class="v" id="syncWx">—</div></div>
+        <div class="sb"><div class="l">下次同步</div><div class="v" id="syncNext">—</div></div>
+      </div>
+      <div class="g2">
+        <button class="am" onclick="triggerSync()">手動同步</button>
+        <button class="sc" onclick="fetchSyncStatus()">更新狀態</button>
+      </div>
+      <div id="syncMsg" class="msg"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">即時圖層</div>
+      <div class="otoggle on" onclick="toggleLayer('congestion')">
+        <div class="odot" style="background:#ff4444"></div>
+        <div class="olbl">車速壅塞</div>
+        <div class="ocnt" id="olCong">—</div>
+      </div>
+      <div class="otoggle on" onclick="toggleLayer('events')">
+        <div class="odot" style="background:#ffb400"></div>
+        <div class="olbl">交通事件</div>
+        <div class="ocnt" id="olEvt">—</div>
+      </div>
+      <div class="otoggle on" onclick="toggleLayer('weather')">
+        <div class="odot" style="background:#4a9eff"></div>
+        <div class="olbl">天氣影響</div>
+        <div class="ocnt" id="olWx">—</div>
+      </div>
+      <div class="g2" style="margin-top:6px">
+        <button class="pr" onclick="loadOverlays()">載入圖層</button>
+        <button class="sc" onclick="clearOverlays()">清除圖層</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">新增事件</div>
+      <div class="row2">
+        <div>
+          <label>類型</label>
+          <select id="evType">
+            <option value="accident">車禍 accident</option>
+            <option value="construction">施工 construction</option>
+            <option value="closure">封閉 closure</option>
+            <option value="congestion">壅塞 congestion</option>
+            <option value="manual">手動 manual</option>
+          </select>
+        </div>
+        <div>
+          <label>嚴重度 (0-1)</label>
+          <input type="number" id="evSev" value="0.7" min="0" max="1" step="0.1"/>
+        </div>
+      </div>
+      <div class="row2">
+        <div><label>緯度</label><input type="number" id="evLat" value="25.0418" step="0.0001" oninput="validateCoord(this,'lat')"/></div>
+        <div><label>經度</label><input type="number" id="evLon" value="121.5365" step="0.0001" oninput="validateCoord(this,'lon')"/></div>
+      </div>
+      <label>影響半徑 (km)</label>
+      <input type="number" id="evRad" value="0.5" min="0.1" max="50" step="0.1"/>
+      <label>限道路類型（選填）</label>
+      <select id="evHW">
+        <option value="">全部道路</option>
+        <option value="motorway">motorway 高速</option>
+        <option value="trunk">trunk 快速</option>
+        <option value="primary">primary 主要</option>
+        <option value="secondary">secondary 次要</option>
+        <option value="tertiary">tertiary 三級</option>
+        <option value="residential">residential 住宅</option>
+      </select>
+      <label>描述</label>
+      <textarea id="evDesc">前方事故，請注意行車安全</textarea>
+      <div class="g2">
+        <button class="pr" onclick="addEvent()">新增事件</button>
+        <button class="dn" onclick="clearEvents()">清空所有</button>
+      </div>
+      <div id="evMsg" class="msg"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">新增天氣影響</div>
+      <div class="row2">
+        <div><label>緯度</label><input type="number" id="wxLat" value="25.0418" step="0.0001"/></div>
+        <div><label>經度</label><input type="number" id="wxLon" value="121.5365" step="0.0001"/></div>
+      </div>
+      <label>影響半徑 (km)</label>
+      <input type="number" id="wxRad" value="50" min="1" max="200"/>
+      <div class="row4" style="margin-top:8px">
+        <div><label>雨</label><input type="number" id="wxRain" value="0.6" min="0" max="1" step="0.1"/></div>
+        <div><label>風</label><input type="number" id="wxWind" value="0.3" min="0" max="1" step="0.1"/></div>
+        <div><label>霧</label><input type="number" id="wxVis" value="0.2" min="0" max="1" step="0.1"/></div>
+        <div><label>特報</label><input type="number" id="wxWarn" value="0" min="0" max="1" step="0.1"/></div>
+      </div>
+      <button class="am" style="margin-top:8px" onclick="addWeather()">套用天氣</button>
+      <div id="wxMsg" class="msg"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">套用動態因子</div>
+      <p style="font-size:11px;color:var(--muted);margin-bottom:8px">新增事件/天氣後需執行（約 20 秒）</p>
+      <div class="row2" style="margin-top:0">
+        <select id="reMode" style="margin:0">
+          <option value="fastest">fastest</option>
+          <option value="balanced" selected>balanced</option>
+          <option value="safest">safest</option>
+        </select>
+        <button class="gn" onclick="recompute()">重算</button>
+      </div>
+      <div id="dynMsg" class="msg"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">動態因子記錄 <span id="evCount" style="color:var(--accent);font-family:var(--mono);font-size:11px;margin-left:6px"></span></div>
+      <div class="evlog" id="evlog"><span style="font-size:11px;color:var(--muted)">尚無記錄</span></div>
+    </div>
+
+    <div class="card">
+      <details>
+        <summary style="cursor:pointer;font-size:12px;color:var(--muted);user-select:none">原始回應</summary>
+        <textarea id="rawPrev" readonly style="height:100px;margin-top:6px;font-family:var(--mono);font-size:10px;color:var(--muted)"></textarea>
+      </details>
+    </div>
+  </div>
+</aside>
+
+<main style="position:relative">
+  <div id="map" style="width:100%;height:100vh"></div>
+  <div class="minfo">
+    <div style="color:var(--amber);font-family:var(--mono);font-size:11px">點地圖 → 填入座標</div>
+    <div style="margin-top:3px">點擊地圖自動填入事件/天氣經緯度</div>
+  </div>
+  <div class="cbadge" id="cbadge">點地圖設定座標</div>
+</main>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<script>
+const evRecords=[];
+let clickMarker=null;
+
+const map=L.map('map').setView([23.7,121.0],8);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+  {attribution:'&copy; OpenStreetMap contributors',maxZoom:19}).addTo(map);
+
+map.on('click',e=>{
+  const{lat,lng}=e.latlng;
+  document.getElementById('evLat').value=lat.toFixed(4);
+  document.getElementById('evLon').value=lng.toFixed(4);
+  document.getElementById('wxLat').value=lat.toFixed(4);
+  document.getElementById('wxLon').value=lng.toFixed(4);
+  if(clickMarker) map.removeLayer(clickMarker);
+  clickMarker=L.marker([lat,lng]).addTo(map).bindPopup(`${lat.toFixed(4)}, ${lng.toFixed(4)}`).openPopup();
+  document.getElementById('cbadge').textContent=`${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+});
+
+const api=()=>document.getElementById('apiBase').value.trim().replace(/\/$/,'');
+async function call(path,opts={}){
+  const r=await fetch(api()+path,{headers:{'Content-Type':'application/json'},...opts});
+  const ct=r.headers.get('content-type')||'';
+  const body=ct.includes('json')?await r.json():await r.text();
+  if(!r.ok) throw new Error(typeof body==='string'?`HTTP ${r.status}: ${body}`:(body.detail||`HTTP ${r.status}`));
+  return body;
+}
+function msg(id,text,type='info'){const e=document.getElementById(id);if(!e)return;e.textContent=text;e.className=`msg ${type}`;e.style.display='block';}
+function hideMsg(id){const e=document.getElementById(id);if(e)e.style.display='none';}
+function loading(show,text='處理中...'){
+  const l=document.getElementById('loader');l.classList.toggle('show',show);
+  if(show)document.getElementById('ltxt').textContent=text;
+}
+
+async function ping(){
+  const dot=document.getElementById('dot'),ct=document.getElementById('ctext');
+  dot.className='dot';ct.className='conn-text';ct.textContent='連線中...';
+  try{
+    const d=await call('/stats');
+    dot.className='dot on';ct.className='conn-text on';
+    ct.textContent=`已連線 GL:${d.graph_loaded?'Y':'N'}`;
+    updateStats(d);
+  }catch(e){dot.className='dot off';ct.className='conn-text off';ct.textContent='無法連線';}
+}
+function updateStats(d){
+  document.getElementById('sON').textContent=(d.osm_nodes||0).toLocaleString();
+  document.getElementById('sOE').textContent=(d.osm_edges||0).toLocaleString();
+  document.getElementById('sGN').textContent=(d.graph_nodes||0).toLocaleString();
+  document.getElementById('sGE').textContent=(d.graph_edges||0).toLocaleString();
+}
+async function fetchStats(){
+  try{const d=await call('/stats');updateStats(d);msg('sysMsg','已更新','ok');}
+  catch(e){msg('sysMsg',e.message,'err');}
+}
+
+function validateCoord(el,type){
+  const v=parseFloat(el.value);
+  const ok=type==='lat'?(v>=21.5&&v<=26.5):(v>=118&&v<=122.5);
+  el.classList.toggle('bad',!ok);
+}
+
+async function addEvent(){
+  const lat=+document.getElementById('evLat').value,lon=+document.getElementById('evLon').value;
+  if(lat<21.5||lat>26.5||lon<118||lon>122.5){msg('evMsg','座標超出台灣範圍','err');return;}
+  const payload={event_type:document.getElementById('evType').value,
+    severity:+document.getElementById('evSev').value,lat,lon,
+    radius_km:+document.getElementById('evRad').value,
+    description:document.getElementById('evDesc').value};
+  const hw=document.getElementById('evHW').value;
+  if(hw)payload.highway=hw;
+  try{
+    const d=await call('/events',{method:'POST',body:JSON.stringify(payload)});
+    evRecords.push({kind:'⚠ '+payload.event_type,text:`${lat.toFixed(3)},${lon.toFixed(3)} r=${payload.radius_km}km`});
+    renderEvLog();
+    msg('evMsg',`已新增(${d.event_id})，記得重算`,'ok');
+    document.getElementById('rawPrev').value=JSON.stringify(d,null,2);
+  }catch(e){msg('evMsg',e.message,'err');}
+}
+async function clearEvents(){
+  if(!confirm('清空所有事件與天氣？'))return;
+  try{await call('/events',{method:'DELETE'});evRecords.length=0;renderEvLog();msg('evMsg','已清空','ok');}
+  catch(e){msg('evMsg',e.message,'err');}
+}
+async function addWeather(){
+  const payload={lat:+document.getElementById('wxLat').value,lon:+document.getElementById('wxLon').value,
+    radius_km:+document.getElementById('wxRad').value,
+    rain_level:+document.getElementById('wxRain').value,wind_level:+document.getElementById('wxWind').value,
+    visibility_level:+document.getElementById('wxVis').value,warning_level:+document.getElementById('wxWarn').value};
+  try{
+    const d=await call('/weather',{method:'POST',body:JSON.stringify(payload)});
+    evRecords.push({kind:'🌧 天氣',text:`r=${payload.radius_km}km 雨${payload.rain_level}`});
+    renderEvLog();
+    msg('wxMsg','天氣已新增，記得重算','ok');
+    document.getElementById('rawPrev').value=JSON.stringify(d,null,2);
+  }catch(e){msg('wxMsg',e.message,'err');}
+}
+async function recompute(){
+  const mode=document.getElementById('reMode').value;
+  loading(true,'重算 dynamic_cost...');msg('dynMsg','重算中...','info');
+  try{
+    const d=await call('/dynamic/recompute',{method:'POST',body:JSON.stringify({mode})});
+    msg('dynMsg',`完成(${mode})`,`ok`);
+    document.getElementById('rawPrev').value=JSON.stringify(d,null,2);
+    if(d.stats)updateStats(d.stats);
+  }catch(e){msg('dynMsg',e.message,'err');}
+  finally{loading(false);}
+}
+function renderEvLog(){
+  const el=document.getElementById('evlog');
+  document.getElementById('evCount').textContent=evRecords.length?`(${evRecords.length})`:'';
+  if(!evRecords.length){el.innerHTML='<span style="font-size:11px;color:var(--muted)">尚無記錄</span>';return;}
+  el.innerHTML=evRecords.slice().reverse().map(r=>`<div class="evrow"><span>${r.kind}</span> ${r.text}</div>`).join('');
+}
+
+async function fetchSyncStatus(){
+  try{
+    const d=await call('/sync/status');
+    const card=document.getElementById('syncCard');
+    if(!d.enabled){card.style.display='none';return;}
+    card.style.display='block';
+    document.getElementById('syncDot').style.background=d.last_sync_ok?'var(--green)':d.last_sync_ok===false?'var(--red)':'var(--muted)';
+    const okEl=document.getElementById('syncOk');
+    okEl.textContent=d.last_sync_ok?'OK':d.last_sync_ok===false?'Error':'—';
+    okEl.style.color=d.last_sync_ok?'var(--green)':d.last_sync_ok===false?'var(--red)':'var(--muted)';
+    document.getElementById('syncSpeed').textContent=d.tdx_speed_count??'—';
+    document.getElementById('syncInc').textContent=d.tdx_incident_count??'—';
+    document.getElementById('syncWx').textContent=d.cwa_station_count??'—';
+    if(d.last_sync_time)document.getElementById('syncTime').textContent=new Date(d.last_sync_time).toLocaleTimeString('zh-TW');
+    if(d.next_sync_time)document.getElementById('syncNext').textContent=new Date(d.next_sync_time).toLocaleTimeString('zh-TW');
+    if(d.last_error)msg('syncMsg',d.last_error,'err');else hideMsg('syncMsg');
+  }catch(e){}
+}
+async function triggerSync(){
+  try{msg('syncMsg','同步中...','info');await call('/sync/trigger',{method:'POST'});msg('syncMsg','已觸發','ok');setTimeout(fetchSyncStatus,5000);}
+  catch(e){msg('syncMsg',e.message,'err');}
+}
+
+const overlayState={congestion:true,events:true,weather:true};
+const overlayGroups={congestion:L.layerGroup().addTo(map),events:L.layerGroup().addTo(map),weather:L.layerGroup().addTo(map)};
+function toggleLayer(name){
+  overlayState[name]=!overlayState[name];
+  event.currentTarget.classList.toggle('on',overlayState[name]);
+  if(overlayState[name])map.addLayer(overlayGroups[name]);else map.removeLayer(overlayGroups[name]);
+}
+function sevColor(sev){
+  if(sev>=0.8)return'#ff2222';if(sev>=0.6)return'#ff6600';
+  if(sev>=0.4)return'#ffaa00';if(sev>=0.2)return'#ffdd00';return'#88cc00';
+}
+const evtColors={accident:'#ff4444',construction:'#ffb400',closure:'#cc0000',congestion:'#ff6600',manual:'#a78bfa'};
+
+async function loadOverlays(){
+  try{
+    const[events,weather]=await Promise.all([call('/events'),call('/weather')]);
+    overlayGroups.congestion.clearLayers();overlayGroups.events.clearLayers();overlayGroups.weather.clearLayers();
+    let cC=0,cE=0;
+    for(const ev of events){
+      const lat=+ev.lat,lon=+ev.lon,sev=+ev.severity||0.5,rad=(+ev.radius_km||0.5)*1000;
+      if(!lat||!lon)continue;
+      const src=ev.source||'manual',typ=ev.event_type||'manual';
+      if(typ==='congestion'&&src==='realtime'){
+        cC++;
+        L.circleMarker([lat,lon],{radius:5,fillColor:sevColor(sev),color:'rgba(0,0,0,.3)',weight:1,fillOpacity:.8})
+          .bindPopup(`<b>壅塞</b> sev=${sev.toFixed(2)}<br>${ev.description||''}`).addTo(overlayGroups.congestion);
+      }else{
+        cE++;const col=evtColors[typ]||'#a78bfa';
+        L.circle([lat,lon],{radius:rad,fillColor:col,color:col,weight:2,fillOpacity:.2,opacity:.6})
+          .bindPopup(`<b>${typ}</b> sev=${sev.toFixed(2)}<br>r=${(rad/1000).toFixed(1)}km`).addTo(overlayGroups.events);
+        L.circleMarker([lat,lon],{radius:6,fillColor:col,color:'#fff',weight:2,fillOpacity:.9}).addTo(overlayGroups.events);
+      }
+    }
+    let cW=0;
+    for(const wx of weather){
+      const lat=+wx.lat,lon=+wx.lon,rad=(+wx.radius_km||30)*1000;
+      const rain=+wx.rain_level||0,wind=+wx.wind_level||0,vis=+wx.visibility_level||0;
+      const mx=Math.max(rain,wind,vis);if(mx<0.01)continue;cW++;
+      let col=rain>=wind&&rain>=vis?'#2288ff':wind>=vis?'#44bb88':'#888888';
+      L.circle([lat,lon],{radius:rad,fillColor:col,color:col,weight:1,fillOpacity:Math.min(.15,mx*.2),opacity:.3})
+        .bindPopup(`<b>天氣</b><br>雨=${rain.toFixed(2)} 風=${wind.toFixed(2)} 霧=${vis.toFixed(2)}`).addTo(overlayGroups.weather);
+    }
+    document.getElementById('olCong').textContent=cC;
+    document.getElementById('olEvt').textContent=cE;
+    document.getElementById('olWx').textContent=cW;
+  }catch(e){console.error('loadOverlays',e);}
+}
+function clearOverlays(){
+  overlayGroups.congestion.clearLayers();overlayGroups.events.clearLayers();overlayGroups.weather.clearLayers();
+  document.getElementById('olCong').textContent='—';document.getElementById('olEvt').textContent='—';document.getElementById('olWx').textContent='—';
+}
+
+document.getElementById('apiBase').value=location.origin;
+ping();fetchSyncStatus();loadOverlays();
+setInterval(ping,30000);setInterval(fetchSyncStatus,30000);setInterval(loadOverlays,60000);
+</script>
+</body>
+</html>

@@ -5,15 +5,20 @@ osm_api.py  啟動: uvicorn osm_api:app --host 127.0.0.1 --port 8000
 環境變數: DB_PATH, TDX_CLIENT_ID, TDX_CLIENT_SECRET, CWB_API_KEY, AUTO_SYNC_INTERVAL
 """
 from __future__ import annotations
+import asyncio
 import logging
 import os
 import threading
+import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+import httpx
 from osm_router import OSMRouter, haversine_km
 
 load_dotenv()
@@ -28,26 +33,29 @@ async def lifespan(app):
     global _router, _syncer
     db = os.getenv("DB_PATH", "taiwan_osm.db")
     print(f"[startup] DB={db}")
-    _router = OSMRouter(db)
-    _router.init_dynamic_schema()
-    _router.load_graph(verbose=True)
+    try:
+        _router = OSMRouter(db)
+        _router.init_dynamic_schema()
+        _router.load_graph(verbose=True)
 
-    interval = int(os.getenv("AUTO_SYNC_INTERVAL", "300"))
-    tdx_id = os.getenv("TDX_CLIENT_ID", "")
-    tdx_secret = os.getenv("TDX_CLIENT_SECRET", "")
-    cwa_key = os.getenv("CWB_API_KEY", "")
+        interval = int(os.getenv("AUTO_SYNC_INTERVAL", "300"))
+        tdx_id = os.getenv("TDX_CLIENT_ID", "")
+        tdx_secret = os.getenv("TDX_CLIENT_SECRET", "")
+        cwa_key = os.getenv("CWB_API_KEY", "")
 
-    if interval > 0 and (tdx_id or cwa_key):
-        from realtime_sync import RealtimeSyncer, TDXClient, CWAClient
-        tdx = TDXClient(tdx_id, tdx_secret) if tdx_id and tdx_secret else None
-        cwa = CWAClient(cwa_key) if cwa_key else None
-        _syncer = RealtimeSyncer(_router, tdx, cwa, interval=interval)
-        _syncer.start()
-        print(f"[startup] realtime sync started (interval={interval}s)")
-    else:
-        print("[startup] realtime sync disabled (AUTO_SYNC_INTERVAL=0 or no API keys)")
+        if interval > 0 and (tdx_id or cwa_key):
+            from realtime_sync import RealtimeSyncer, TDXClient, CWAClient
+            tdx = TDXClient(tdx_id, tdx_secret) if tdx_id and tdx_secret else None
+            cwa = CWAClient(cwa_key) if cwa_key else None
+            _syncer = RealtimeSyncer(_router, tdx, cwa, interval=interval)
+            _syncer.start()
+            print(f"[startup] realtime sync started (interval={interval}s)")
+        else:
+            print("[startup] realtime sync disabled (AUTO_SYNC_INTERVAL=0 or no API keys)")
 
-    print("[startup] 就緒")
+        print("[startup] 就緒")
+    except FileNotFoundError:
+        print(f"[startup] DB not found at {db} — running without router (upload DB then restart)")
     yield
 
     if _syncer:
@@ -56,6 +64,84 @@ async def lifespan(app):
 
 app = FastAPI(title="Taiwan OSM Dynamic Router", version="3.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware,allow_origins=["*"],allow_credentials=False,allow_methods=["*"],allow_headers=["*"])
+
+_STATIC_DIR = Path(__file__).parent
+_TGOS_KEY = os.getenv("TGOS_API_KEY", "")
+_geocode_cache: dict[str, tuple[float, list]] = {}
+
+@app.get("/app", response_class=FileResponse)
+def serve_user():
+    return FileResponse(_STATIC_DIR / "index.html", media_type="text/html")
+
+@app.get("/admin", response_class=FileResponse)
+def serve_admin():
+    return FileResponse(_STATIC_DIR / "admin.html", media_type="text/html")
+
+@app.get("/geocode")
+async def geocode(q: str = Query(..., min_length=1, max_length=200)):
+    now = time.time()
+    if q in _geocode_cache:
+        ts, results = _geocode_cache[q]
+        if now - ts < 60:
+            return results
+
+    results = []
+    async with httpx.AsyncClient(timeout=8) as client:
+        tasks = []
+        # Nominatim
+        tasks.append(client.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={"q": q, "format": "json", "limit": "5",
+                    "viewbox": "118,26.5,122.5,21.5", "bounded": "1",
+                    "accept-language": "zh-TW"},
+            headers={"User-Agent": "TaiwanOSMRouter/1.0"}
+        ))
+        # TGOS
+        if _TGOS_KEY:
+            tasks.append(client.get(
+                "https://api.tgos.tw/TGOS_API/tgos_addr_to_coord",
+                params={"oAPPId": _TGOS_KEY, "oAddress": q, "oSRS": "EPSG:4326", "oFuzzyType": "2"}
+            ))
+
+        responses = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Parse Nominatim
+        nom_resp = responses[0]
+        if not isinstance(nom_resp, Exception) and nom_resp.status_code == 200:
+            for item in nom_resp.json()[:5]:
+                results.append({
+                    "name": item.get("display_name", "")[:80],
+                    "lat": float(item["lat"]),
+                    "lon": float(item["lon"]),
+                    "source": "nominatim"
+                })
+
+        # Parse TGOS
+        if _TGOS_KEY and len(responses) > 1:
+            tgos_resp = responses[1]
+            if not isinstance(tgos_resp, Exception) and tgos_resp.status_code == 200:
+                try:
+                    data = tgos_resp.json()
+                    if isinstance(data, dict) and data.get("AddressList"):
+                        for addr in data["AddressList"][:3]:
+                            x = addr.get("X") or addr.get("x")
+                            y = addr.get("Y") or addr.get("y")
+                            if x and y:
+                                results.insert(0, {
+                                    "name": addr.get("FULL_ADDR", q),
+                                    "lat": float(y),
+                                    "lon": float(x),
+                                    "source": "tgos"
+                                })
+                except Exception:
+                    pass
+
+    _geocode_cache[q] = (now, results)
+    if len(_geocode_cache) > 500:
+        oldest = min(_geocode_cache, key=lambda k: _geocode_cache[k][0])
+        del _geocode_cache[oldest]
+
+    return results
 
 def get_r():
     if _router is None: raise HTTPException(503,"路由器尚未初始化")

@@ -90,6 +90,8 @@ class OSMRouter:
         self._graph_edge_count = 0
         self._osm_node_count = 0
         self._osm_edge_count = 0
+        self._edge_index: Dict[str, Tuple[int, int]] = {}
+        self._modified_edges: set = set()
 
     def init_dynamic_schema(self):
         with _conn(self.db_path) as conn:
@@ -110,6 +112,54 @@ class OSMRouter:
                 is_active INTEGER DEFAULT 1,updated_at TEXT)""")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_edges_latlon ON osm_edges(lat_a, lon_a)")
             conn.commit()
+
+    def ensure_component_ids(self, verbose=True):
+        if self._has_component_id():
+            return
+        import time; t0=time.time()
+        if verbose: print("計算連通分量（一次性）...", flush=True)
+        with _conn(self.db_path) as conn:
+            conn.execute("ALTER TABLE osm_edges ADD COLUMN component_id INTEGER DEFAULT -1")
+            conn.commit()
+            hw_ph=",".join("?"*len(MAJOR_HW))
+            adj: dict[int, set[int]] = {}
+            for r in conn.execute(f"SELECT from_node,to_node FROM osm_edges WHERE highway IN ({hw_ph})", MAJOR_HW):
+                fn, tn = r["from_node"], r["to_node"]
+                adj.setdefault(fn, set()).add(tn)
+                adj.setdefault(tn, set()).add(fn)
+            best_cc: set[int] = set()
+            visited: set[int] = set()
+            comp_id = 0
+            components: list[tuple[int, set[int]]] = []
+            for seed in adj:
+                if seed in visited: continue
+                queue = collections.deque([seed])
+                cc: set[int] = set()
+                while queue:
+                    n = queue.popleft()
+                    if n in cc: continue
+                    cc.add(n)
+                    for nb in adj.get(n, ()):
+                        if nb not in cc: queue.append(nb)
+                visited |= cc
+                components.append((comp_id, cc))
+                if len(cc) > len(best_cc):
+                    best_cc = cc
+                    best_id = comp_id
+                comp_id += 1
+            del adj, visited
+            for cid, cc in components:
+                final_id = 0 if cid == best_id else cid
+                nodes = list(cc)
+                for i in range(0, len(nodes), 500):
+                    batch = nodes[i:i+500]
+                    ph = ",".join("?" * len(batch))
+                    conn.execute(f"UPDATE osm_edges SET component_id=? WHERE from_node IN ({ph})", [final_id] + batch)
+            conn.commit()
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_comp ON osm_edges(component_id)")
+            conn.commit()
+        if verbose:
+            print(f"  {len(components)} 分量，最大 {len(best_cc):,} 節點  ({time.time()-t0:.1f}s)", flush=True)
 
     @staticmethod
     def _build_edge(r):
@@ -132,13 +182,15 @@ class OSMRouter:
         graph = collections.defaultdict(list)
         ncoords = {}
         edge_count = 0
+        comp_filter = self._has_component_id()
+        comp_clause = " AND component_id=0" if comp_filter else ""
         with _conn(self.db_path) as conn:
             cur=conn.execute(f"""SELECT from_node,to_node,edge_id,highway,name,
                 length_km,speed_kmh,lat_a,lon_a,lat_b,lon_b,
                 COALESCE(dynamic_mult,1.0) AS mult,
                 COALESCE(closure_flag,0) AS closed,
                 COALESCE(risk_score,0) AS risk
-                FROM osm_edges WHERE highway IN ({hw_ph})""",MAJOR_HW)
+                FROM osm_edges WHERE highway IN ({hw_ph}){comp_clause}""",MAJOR_HW)
             for r in cur:
                 edge_count += 1
                 if int(r["closed"] or 0): continue
@@ -146,40 +198,16 @@ class OSMRouter:
                 graph[fn].append(rec)
                 ncoords[fn] = (la, loa); ncoords[tn] = (lb, lob)
 
-        adj: dict[int, set[int]] = {}
+        edge_index = {}
         for fn, edges in graph.items():
-            if fn not in adj: adj[fn] = set()
-            for e in edges:
-                adj[fn].add(e.to)
-                if e.to not in adj: adj[e.to] = set()
-                adj[e.to].add(fn)
-        best_cc: set[int] = set()
-        visited: set[int] = set()
-        for seed in adj:
-            if seed in visited: continue
-            queue = collections.deque([seed])
-            cc: set[int] = set()
-            while queue:
-                n = queue.popleft()
-                if n in cc: continue
-                cc.add(n)
-                for nb in adj.get(n, ()):
-                    if nb not in cc: queue.append(nb)
-            visited |= cc
-            if len(cc) > len(best_cc): best_cc = cc
-        del adj, visited
-        removed = 0
-        for fn in list(graph.keys()):
-            if fn not in best_cc:
-                del graph[fn]
-                removed += 1
-        ncoords = {k: v for k, v in ncoords.items() if k in best_cc}
-        kept_edges = sum(len(v) for v in graph.values())
-        if verbose and removed:
-            print(f"  連通分量過濾：移除 {removed:,} 孤立節點，保留 {len(graph):,} 節點 {kept_edges:,} 邊", flush=True)
+            for i, e in enumerate(edges):
+                edge_index[e.eid] = (fn, i)
 
         self._graph = graph
         self._ncoords = ncoords
+        self._edge_index = edge_index
+        self._modified_edges = set()
+        kept_edges = sum(len(v) for v in graph.values())
         self._graph_node_count = len(graph)
         self._graph_edge_count = kept_edges
         self._graph_loaded = True
@@ -192,6 +220,11 @@ class OSMRouter:
         threading.Thread(target=_count, daemon=True).start()
         if verbose: print(f"  {len(graph):,} 節點，{kept_edges:,} 邊  ({time.time()-t0:.1f}s)",flush=True)
         return kept_edges
+
+    def _has_component_id(self) -> bool:
+        with _conn(self.db_path) as conn:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(osm_edges)").fetchall()}
+            return "component_id" in cols
 
     def _load_local_graph(self, bbox, pad=0.025):
         min_lat, min_lon, max_lat, max_lon = bbox
@@ -367,7 +400,37 @@ class OSMRouter:
                     (wm,rw,wlat-dlat,wlat+dlat,wlon-dlon,wlon+dlon))
             conn.commit()
             conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
-        self.load_graph(verbose=False)
+        self._apply_dynamic_to_graph()
+
+    def _apply_dynamic_to_graph(self):
+        for eid in self._modified_edges:
+            loc = self._edge_index.get(eid)
+            if loc is None: continue
+            fn, idx = loc
+            e = self._graph[fn][idx]
+            orig_cost = (e.dist / max(e.spd, MIN_SPEED)) * 60
+            self._graph[fn][idx] = e._replace(cost=orig_cost, risk=0.0)
+        self._modified_edges.clear()
+        with _conn(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT edge_id, COALESCE(dynamic_mult,1.0) AS mult, "
+                "COALESCE(closure_flag,0) AS closed, COALESCE(risk_score,0) AS risk "
+                "FROM osm_edges WHERE dynamic_mult!=1.0 OR closure_flag!=0 OR risk_score!=0.0"
+            ).fetchall()
+        for r in rows:
+            eid = r["edge_id"]
+            loc = self._edge_index.get(eid)
+            if loc is None: continue
+            fn, idx = loc
+            e = self._graph[fn][idx]
+            if int(r["closed"] or 0):
+                self._graph[fn][idx] = e._replace(cost=1e8, risk=100.0)
+            else:
+                mult = float(r["mult"] or 1.0)
+                spd = max(e.spd / max(mult, 0.01), MIN_SPEED)
+                new_cost = (e.dist / spd) * 60
+                self._graph[fn][idx] = e._replace(cost=new_cost, risk=float(r["risk"] or 0))
+            self._modified_edges.add(eid)
 
     def stats(self):
         s={"db_path":self.db_path,"graph_loaded":self._graph_loaded,

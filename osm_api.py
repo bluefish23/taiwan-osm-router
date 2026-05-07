@@ -36,6 +36,7 @@ async def lifespan(app):
     try:
         _router = OSMRouter(db)
         _router.init_dynamic_schema()
+        _router.ensure_component_ids()
         _router.load_graph(verbose=True)
 
         interval = int(os.getenv("AUTO_SYNC_INTERVAL", "300"))

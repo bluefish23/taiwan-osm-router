@@ -328,7 +328,7 @@ body.driving .drive-hud{display:block}
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 <script>
-const API_BASE=location.origin;
+const API_BASE=(window.__API_BASE||location.origin).replace(/\/$/,'');
 let mode='balanced', clickPhase='start';
 let startCoord=null, endCoord=null;
 let startM=null, endM=null, routeL=null, latestRoute=null;

@@ -10,3 +10,5 @@ cf_*.txt
 ngrok_*.txt
 CLAUDE.md
 README.md
+frontend/
+*.bat

@@ -115,6 +115,7 @@ button{border:none;border-radius:6px;padding:8px 12px;font-family:var(--cond);
     <div class="dot" id="dot"></div>
     <span class="conn-text" id="ctext">未連線</span>
     <input class="api-in" id="apiBase" onchange="ping()"/>
+    <input class="api-in" id="adminToken" placeholder="Admin Token" style="width:160px;margin-left:6px"/>
     <a href="/app" class="nav-link">← 導航</a>
   </div>
   <div class="brand">
@@ -300,8 +301,14 @@ map.on('click',e=>{
 });
 
 const api=()=>document.getElementById('apiBase').value.trim().replace(/\/$/,'');
+function authHeaders(){
+  const h={'Content-Type':'application/json'};
+  const tk=(document.getElementById('adminToken')?.value||'').trim();
+  if(tk) h['Authorization']='Bearer '+tk;
+  return h;
+}
 async function call(path,opts={}){
-  const r=await fetch(api()+path,{headers:{'Content-Type':'application/json'},...opts});
+  const r=await fetch(api()+path,{headers:authHeaders(),...opts});
   const ct=r.headers.get('content-type')||'';
   const body=ct.includes('json')?await r.json():await r.text();
   if(!r.ok) throw new Error(typeof body==='string'?`HTTP ${r.status}: ${body}`:(body.detail||`HTTP ${r.status}`));

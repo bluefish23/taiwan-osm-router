@@ -194,6 +194,8 @@ body.driving .drive-hud{display:block}
 .drive-road{font-family:var(--cond);font-size:28px;font-weight:700;color:#fff;margin-bottom:4px}
 .drive-next{font-size:13px;color:var(--muted)}
 .drive-next span{color:var(--accent)}
+.drive-turn{font-size:17px;color:#00e5a0;margin-top:10px;font-weight:600;min-height:24px}
+.drive-turn .turn-icon{font-size:24px;margin-right:4px;vertical-align:middle}
 
 .drive-bottom{
   position:absolute;bottom:0;left:0;right:0;pointer-events:auto;
@@ -302,6 +304,7 @@ body.driving .drive-hud{display:block}
 <!-- Driving HUD -->
 <div class="drive-hud" id="driveHud">
   <div class="drive-top">
+    <div class="drive-turn" id="driveTurn"></div>
     <div class="drive-road" id="driveRoad">—</div>
     <div class="drive-next">下一段 <span id="driveNext">—</span></div>
   </div>
@@ -329,6 +332,7 @@ body.driving .drive-hud{display:block}
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 <script>
 const API_BASE=(window.__API_BASE||location.origin).replace(/\/$/,'');
+function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 let mode='balanced', clickPhase='start';
 let startCoord=null, endCoord=null;
 let startM=null, endM=null, routeL=null, latestRoute=null;
@@ -424,7 +428,7 @@ function setupSearch(inputId,sugId,onSelect){
         const res=await call('/geocode?q='+encodeURIComponent(q));
         if(!res.length){sugBox.classList.remove('show');return;}
         sugBox.innerHTML=res.map(r=>
-          `<div class="sug-item" data-lat="${r.lat}" data-lon="${r.lon}">${r.name}<span class="sug-src">${r.source}</span></div>`
+          `<div class="sug-item" data-lat="${escHtml(r.lat)}" data-lon="${escHtml(r.lon)}">${escHtml(r.name)}<span class="sug-src">${escHtml(r.source)}</span></div>`
         ).join('');
         sugBox.classList.add('show');
       }catch(e){sugBox.classList.remove('show');}
@@ -464,11 +468,16 @@ function onGpsPos(pos){
   gpsCoord={lat,lon:lng};
   gpsError=null;
   if(!gpsMarker){
-    gpsMarker=L.circleMarker([lat,lng],{radius:7,fillColor:'#4a9eff',color:'#fff',weight:2,fillOpacity:1,className:'gps-pulse'}).addTo(map);
-    gpsCircle=L.circle([lat,lng],{radius:accuracy,fillColor:'#4a9eff',color:'#4a9eff',weight:1,fillOpacity:.08,opacity:.2}).addTo(map);
+    gpsMarker=L.circleMarker([lat,lng],{radius:7,fillColor:'#4a9eff',color:'#fff',weight:2,fillOpacity:1,className:'gps-pulse'});
+    gpsCircle=L.circle([lat,lng],{radius:accuracy,fillColor:'#4a9eff',color:'#4a9eff',weight:1,fillOpacity:.08,opacity:.2});
   }else{
     gpsMarker.setLatLng([lat,lng]);
     gpsCircle.setLatLng([lat,lng]).setRadius(accuracy);
+  }
+  if(driving){
+    if(!map.hasLayer(gpsMarker)){gpsMarker.addTo(map);gpsCircle.addTo(map);}
+  }else{
+    if(map.hasLayer(gpsMarker)){map.removeLayer(gpsMarker);map.removeLayer(gpsCircle);}
   }
   document.getElementById('gpsBtn').classList.add('tracking');
   if(driving) onDriveGpsUpdate();
@@ -534,7 +543,7 @@ function renderRoute(d){
       },
       onEachFeature:(f,layer)=>{
         const p=f.properties||{};
-        layer.bindPopup(`<b>${p.name||p.highway||'—'}</b><br>${(p.length_km||0).toFixed(2)} km`);
+        layer.bindPopup(`<b>${escHtml(p.name||p.highway||'—')}</b><br>${(p.length_km||0).toFixed(2)} km`);
       }
     }).addTo(map);
     const b=routeL.getBounds();
@@ -557,7 +566,7 @@ function renderRoute(d){
   if(prev)merged.push({nm:prev,km,mn});
 
   document.getElementById('resSteps').innerHTML=merged.slice(0,30).map((s,i)=>
-    `<li><div class="step-icon">${i+1}</div><span class="step-name">${s.nm}</span><span class="step-dist">${s.km.toFixed(1)} km</span></li>`
+    `<li><div class="step-icon">${i+1}</div><span class="step-name">${escHtml(s.nm)}</span><span class="step-dist">${s.km.toFixed(1)} km</span></li>`
   ).join('');
 
   document.getElementById('resultPanel').classList.add('show');
@@ -582,17 +591,18 @@ function dlAnalysis(){
 // ── Driving Mode
 let driving=false, driveFollowing=true, driveEdges=[], driveEdgeIdx=0;
 let lastGpsTime=0, lastGpsCoord=null, currentSpeed=0;
+let offRouteCount=0, rerouting=false, lastEventHash='';
 
 function buildDriveEdges(){
   if(!latestRoute?.edges) return[];
-  const merged=[];
-  let prev=null,km=0,mn=0;
-  for(const e of latestRoute.edges){
-    const nm=e.name||e.highway||'—';
+  const rawEdges=latestRoute.edges,merged=[];
+  let prev=null,km=0,mn=0,rawStart=0;
+  for(let i=0;i<rawEdges.length;i++){
+    const e=rawEdges[i],nm=e.name||e.highway||'—';
     if(nm===prev){km+=e.length_km||0;mn+=e.travel_min||0;}
-    else{if(prev!==null)merged.push({nm:prev,km,mn});prev=nm;km=e.length_km||0;mn=e.travel_min||0;}
+    else{if(prev!==null)merged.push({nm:prev,km,mn,rawStart,rawEnd:i-1});prev=nm;km=e.length_km||0;mn=e.travel_min||0;rawStart=i;}
   }
-  if(prev!==null)merged.push({nm:prev,km,mn});
+  if(prev!==null)merged.push({nm:prev,km,mn,rawStart,rawEnd:rawEdges.length-1});
   return merged;
 }
 
@@ -617,8 +627,22 @@ function stopDriving(){
   currentSpeed=0;
   lastGpsCoord=null;
   lastGpsTime=0;
+  offRouteCount=0;
+  rerouting=false;
+  lastEventHash='';
   document.body.classList.remove('driving');
-  if(routeL){const b=routeL.getBounds();if(b.isValid())map.fitBounds(b.pad(.08));}
+  document.getElementById('driveTurn').textContent='';
+  if(routeL){
+    routeL.eachLayer(layer=>{
+      if(layer.feature){
+        const hw=layer.feature.properties?.highway||'';
+        const c={'motorway':'#00d4ff','trunk':'#00e5a0','primary':'#ffb400',
+                  'secondary':'#a78bfa','tertiary':'#6b7280'}[hw]||'#4a6d99';
+        layer.setStyle({color:c,opacity:.85,weight:hw.includes('motorway')||hw.includes('trunk')?5:3});
+      }
+    });
+    const b=routeL.getBounds();if(b.isValid())map.fitBounds(b.pad(.08));
+  }
   else map.setZoom(12);
 }
 
@@ -627,14 +651,55 @@ function driveRecenter(){
   if(gpsCoord)map.setView([gpsCoord.lat,gpsCoord.lon],16);
 }
 
+async function reroute(lat,lon){
+  if(rerouting||!endCoord)return;
+  rerouting=true;
+  showMsg('重新計算路線...','info');
+  try{
+    const d=await call('/route',{method:'POST',body:JSON.stringify({
+      start_lat:lat,start_lon:lon,end_lat:endCoord.lat,end_lon:endCoord.lon,mode
+    })});
+    latestRoute=d;
+    renderRoute(d);
+    driveEdges=buildDriveEdges();
+    driveEdgeIdx=0;
+    offRouteCount=0;
+    showMsg(`已重新路由：${d.total_km.toFixed(1)}km / ${d.total_min.toFixed(0)}min`,'ok');
+  }catch(e){showMsg('重路由失敗','err');}
+  rerouting=false;
+}
+
 function distBetween(lat1,lon1,lat2,lon2){
   const R=6371,dLat=(lat2-lat1)*Math.PI/180,dLon=(lon2-lon1)*Math.PI/180;
   const a=Math.sin(dLat/2)**2+Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
   return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
 }
 
+function calcBearing(lat1,lon1,lat2,lon2){
+  const toRad=v=>v*Math.PI/180;
+  const dLon=toRad(lon2-lon1);
+  const y=Math.sin(dLon)*Math.cos(toRad(lat2));
+  const x=Math.cos(toRad(lat1))*Math.sin(toRad(lat2))-Math.sin(toRad(lat1))*Math.cos(toRad(lat2))*Math.cos(dLon);
+  return(Math.atan2(y,x)*180/Math.PI+360)%360;
+}
+
+function getTurnInstruction(prevEdge,nextEdge){
+  if(!prevEdge||!nextEdge)return{icon:'⬆',text:'直行'};
+  const b1=calcBearing(prevEdge.lat_a,prevEdge.lon_a,prevEdge.lat_b,prevEdge.lon_b);
+  const b2=calcBearing(nextEdge.lat_a,nextEdge.lon_a,nextEdge.lat_b,nextEdge.lon_b);
+  let turn=((b2-b1)+360)%360;
+  if(turn>180)turn-=360;
+  if(Math.abs(turn)<25)return{icon:'⬆',text:'直行'};
+  if(turn>=25&&turn<70)return{icon:'↗',text:'微右轉'};
+  if(turn>=70&&turn<150)return{icon:'➡',text:'右轉'};
+  if(turn>=150)return{icon:'↩',text:'迴轉'};
+  if(turn<=-25&&turn>-70)return{icon:'↖',text:'微左轉'};
+  if(turn<=-70&&turn>-150)return{icon:'⬅',text:'左轉'};
+  return{icon:'↩',text:'迴轉'};
+}
+
 function findCurrentEdge(lat,lon){
-  if(!latestRoute?.edges?.length)return 0;
+  if(!latestRoute?.edges?.length)return{idx:0,dist:Infinity};
   let bestIdx=0, bestDist=Infinity;
   const rawEdges=latestRoute.edges;
   const merged=driveEdges;
@@ -653,16 +718,28 @@ function findCurrentEdge(lat,lon){
       if(nextNm!==nm)mIdx++;
     }
   }
-  return bestIdx;
+  return{idx:bestIdx,dist:bestDist};
 }
 
 function updateDriveHud(){
   if(!driving||!driveEdges.length)return;
   const cur=driveEdges[driveEdgeIdx]||driveEdges[0];
   const next=driveEdges[driveEdgeIdx+1];
+  const rawEdges=latestRoute?.edges||[];
 
   document.getElementById('driveRoad').textContent=cur.nm;
   document.getElementById('driveNext').textContent=next?`${next.nm}（${next.km.toFixed(1)} km）`:'即將到達終點';
+
+  const turnEl=document.getElementById('driveTurn');
+  if(next&&cur.rawEnd!=null&&next.rawStart!=null){
+    const prevRaw=rawEdges[cur.rawEnd],nextRaw=rawEdges[next.rawStart];
+    const turn=getTurnInstruction(prevRaw,nextRaw);
+    const rawDist=gpsCoord&&nextRaw?distBetween(gpsCoord.lat,gpsCoord.lon,nextRaw.lat_a,nextRaw.lon_a):cur.km;
+    const distStr=rawDist>=1?`${rawDist.toFixed(1)}km`:`${Math.round(rawDist*1000)}m`;
+    turnEl.innerHTML=`<span class="turn-icon">${turn.icon}</span> ${distStr} 後${turn.text}`;
+  }else{
+    turnEl.textContent=next?'':'🏁 即將到達';
+  }
 
   let remKm=0,remMin=0;
   for(let i=driveEdgeIdx;i<driveEdges.length;i++){
@@ -677,8 +754,18 @@ function updateDriveHud(){
   document.getElementById('driveSpeed').textContent=Math.round(currentSpeed);
 }
 
+function updateRouteProgress(newIdx){
+  if(!routeL||!driveEdges[newIdx])return;
+  const greyUpTo=driveEdges[newIdx].rawStart;
+  let i=0;
+  routeL.eachLayer(layer=>{
+    if(i<greyUpTo)layer.setStyle({color:'#666',opacity:0.3,weight:2});
+    i++;
+  });
+}
+
 function onDriveGpsUpdate(){
-  if(!driving)return;
+  if(!driving||!gpsCoord)return;
   const now=Date.now();
   if(lastGpsCoord&&lastGpsTime){
     const dt=(now-lastGpsTime)/1000;
@@ -691,24 +778,37 @@ function onDriveGpsUpdate(){
   lastGpsCoord={...gpsCoord};
   lastGpsTime=now;
 
-  if(latestRoute?.geojson){
-    const newIdx=findCurrentEdge(gpsCoord.lat,gpsCoord.lon);
-    if(newIdx>=driveEdgeIdx)driveEdgeIdx=newIdx;
+  const snap=latestRoute?.edges?.length?findCurrentEdge(gpsCoord.lat,gpsCoord.lon):{idx:0,dist:Infinity};
+
+  if(!snap||snap.dist>0.08){
+    offRouteCount++;
+    if(offRouteCount>=3){
+      offRouteCount=0;
+      reroute(gpsCoord.lat,gpsCoord.lon);
+      return;
+    }
+  }else{
+    offRouteCount=0;
+  }
+
+  if(snap.idx>=driveEdgeIdx){
+    if(snap.idx>driveEdgeIdx)updateRouteProgress(snap.idx);
+    driveEdgeIdx=snap.idx;
   }
 
   if(driveFollowing)map.setView([gpsCoord.lat,gpsCoord.lon],Math.max(map.getZoom(),15));
 
-  if(driveEdgeIdx>=driveEdges.length-1){
-    const endEdge=driveEdges[driveEdges.length-1];
-    if(endCoord){
-      const distToEnd=distBetween(gpsCoord.lat,gpsCoord.lon,endCoord.lat,endCoord.lon);
-      if(distToEnd<0.05){
-        document.getElementById('driveRoad').textContent='已到達目的地';
-        document.getElementById('driveNext').textContent='';
-        document.getElementById('driveRemKm').textContent='0';
-        document.getElementById('driveEta').textContent='--:--';
-        return;
-      }
+  if(endCoord){
+    const distToEnd=distBetween(gpsCoord.lat,gpsCoord.lon,endCoord.lat,endCoord.lon);
+    if(distToEnd<0.05){
+      showMsg('已到達目的地！','ok');
+      document.getElementById('driveRoad').textContent='🏁 已到達目的地';
+      document.getElementById('driveNext').textContent='';
+      document.getElementById('driveTurn').textContent='';
+      document.getElementById('driveRemKm').textContent='0';
+      document.getElementById('driveEta').textContent='--:--';
+      setTimeout(()=>stopDriving(),3000);
+      return;
     }
   }
   updateDriveHud();
@@ -735,6 +835,25 @@ const evtColors={accident:'#ff4444',construction:'#ffb400',closure:'#cc0000',con
 async function loadOverlays(){
   try{
     const[events,weather]=await Promise.all([call('/events'),call('/weather')]);
+
+    if(driving&&latestRoute&&gpsCoord&&!rerouting){
+      const evHash=JSON.stringify(events.map(e=>e.id||`${e.lat},${e.lon}`).sort());
+      if(lastEventHash&&evHash!==lastEventHash){
+        const startRaw=driveEdges[driveEdgeIdx]?.rawStart||0;
+        const remaining=latestRoute.edges.slice(startRaw);
+        const onRoute=events.filter(ev=>{
+          if(!ev.lat||!ev.lon)return false;
+          const rad=+(ev.radius_km||0.5);
+          return remaining.some(e=>distBetween(+ev.lat,+ev.lon,e.lat_a,e.lon_a)<rad);
+        });
+        if(onRoute.length>0){
+          showMsg(`路線上出現 ${onRoute.length} 個新事件，重新計算...`,'info');
+          reroute(gpsCoord.lat,gpsCoord.lon);
+        }
+      }
+      lastEventHash=evHash;
+    }
+
     overlayGroups.congestion.clearLayers();overlayGroups.events.clearLayers();overlayGroups.weather.clearLayers();
     let cC=0,cE=0;
     for(const ev of events){

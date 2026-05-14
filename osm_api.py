@@ -14,7 +14,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+import secrets
+from fastapi import FastAPI, Depends, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -64,27 +65,42 @@ async def lifespan(app):
         print("[shutdown] realtime sync stopped")
 
 app = FastAPI(title="Taiwan OSM Dynamic Router", version="3.0.0", lifespan=lifespan)
-app.add_middleware(CORSMiddleware,allow_origins=["*"],allow_credentials=False,allow_methods=["*"],allow_headers=["*"])
+_ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
+app.add_middleware(CORSMiddleware,allow_origins=_ALLOWED_ORIGINS,allow_credentials=False,
+                   allow_methods=["GET","POST","DELETE"],allow_headers=["Content-Type","Authorization"])
 
 _STATIC_DIR = Path(__file__).parent
 _TGOS_KEY = os.getenv("TGOS_API_KEY", "")
+_ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
 _geocode_cache: dict[str, tuple[float, list]] = {}
+_cache_lock = threading.Lock()
+_log = logging.getLogger(__name__)
+
+def require_admin(request: Request):
+    client = request.client.host if request.client else ""
+    if client in ("127.0.0.1", "::1", "localhost"):
+        return
+    auth = request.headers.get("authorization", "")
+    token = auth.replace("Bearer ", "") if auth.startswith("Bearer ") else ""
+    if not _ADMIN_TOKEN or not secrets.compare_digest(token, _ADMIN_TOKEN):
+        raise HTTPException(403, "需要管理員權限")
 
 @app.get("/app", response_class=FileResponse)
 def serve_user():
     return FileResponse(_STATIC_DIR / "index.html", media_type="text/html")
 
 @app.get("/admin", response_class=FileResponse)
-def serve_admin():
+def serve_admin(_=Depends(require_admin)):
     return FileResponse(_STATIC_DIR / "admin.html", media_type="text/html")
 
 @app.get("/geocode")
 async def geocode(q: str = Query(..., min_length=1, max_length=200)):
     now = time.time()
-    if q in _geocode_cache:
-        ts, results = _geocode_cache[q]
-        if now - ts < 60:
-            return results
+    with _cache_lock:
+        if q in _geocode_cache:
+            ts, results = _geocode_cache[q]
+            if now - ts < 60:
+                return results
 
     results = []
     async with httpx.AsyncClient(timeout=8) as client:
@@ -137,10 +153,11 @@ async def geocode(q: str = Query(..., min_length=1, max_length=200)):
                 except Exception:
                     pass
 
-    _geocode_cache[q] = (now, results)
-    if len(_geocode_cache) > 500:
-        oldest = min(_geocode_cache, key=lambda k: _geocode_cache[k][0])
-        del _geocode_cache[oldest]
+    with _cache_lock:
+        _geocode_cache[q] = (now, results)
+        if len(_geocode_cache) > 500:
+            oldest = min(_geocode_cache, key=lambda k: _geocode_cache[k][0])
+            del _geocode_cache[oldest]
 
     return results
 
@@ -152,7 +169,8 @@ class EventReq(BaseModel):
     event_type: str = Field(pattern="^(accident|construction|closure|congestion|manual)$")
     severity: float = Field(ge=0,le=1)
     lat: float; lon: float; radius_km: float=0.5
-    highway: Optional[str]=None; description: str=""
+    highway: Optional[str]=Field(default=None,pattern=r"^(motorway|motorway_link|trunk|trunk_link|primary|primary_link|secondary|secondary_link|tertiary|tertiary_link|unclassified|residential|living_street|service|road)$")
+    description: str=""
 
 class WeatherReq(BaseModel):
     lat: float; lon: float; radius_km: float=50.0
@@ -176,6 +194,15 @@ def chk(lat,lon,name=""):
 
 @app.get("/")
 def root():
+    html = Path(__file__).parent / "index.html"
+    if html.exists():
+        return FileResponse(html, media_type="text/html")
+    return {"service":"Taiwan OSM Dynamic Router","version":"3.0.0",
+            "graph_loaded":_router is not None and _router._graph_loaded,
+            "sync_enabled": _syncer is not None}
+
+@app.get("/status")
+def status():
     return {"service":"Taiwan OSM Dynamic Router","version":"3.0.0",
             "graph_loaded":_router is not None and _router._graph_loaded,
             "sync_enabled": _syncer is not None}
@@ -194,7 +221,7 @@ def sync_status():
     return {"enabled": True, **_syncer.status()}
 
 @app.post("/sync/trigger")
-def sync_trigger():
+def sync_trigger(_=Depends(require_admin)):
     if _syncer is None:
         raise HTTPException(400, "Realtime sync not configured")
     threading.Thread(target=_syncer._run_one_sync, daemon=True).start()
@@ -204,24 +231,26 @@ def sync_trigger():
 def nearest(lat:float,lon:float):
     chk(lat,lon)
     try: return get_r().nearest_node(lat,lon)
-    except Exception as e: raise HTTPException(500,str(e))
+    except Exception as e:
+        _log.exception("nearest failed")
+        raise HTTPException(500,"查詢最近節點失敗")
 
 @app.get("/events")
 def list_events(): return get_r().list_events()
 
 @app.post("/events")
-def add_event(req:EventReq):
+def add_event(req:EventReq, _=Depends(require_admin)):
     chk(req.lat,req.lon,"事件")
     eid=get_r().add_event(req.event_type,req.severity,req.lat,req.lon,
                            req.radius_km,req.highway,req.description)
     return {"ok":True,"event_id":eid,"note":"請呼叫 /dynamic/recompute 套用"}
 
 @app.delete("/events/{event_id}")
-def del_event(event_id:str):
+def del_event(event_id:str, _=Depends(require_admin)):
     get_r().remove_event(event_id); return {"ok":True,"deleted":event_id}
 
 @app.delete("/events")
-def clear_events():
+def clear_events(_=Depends(require_admin)):
     get_r().clear_events(); return {"ok":True}
 
 @app.get("/weather")
@@ -230,27 +259,35 @@ def list_weather():
         with __import__('sqlite3').connect(get_r().db_path,timeout=10) as conn:
             conn.row_factory = __import__('sqlite3').Row
             return [dict(r) for r in conn.execute("SELECT * FROM dynamic_weather WHERE is_active=1").fetchall()]
-    except: return []
+    except Exception as e:
+        _log.warning("list_weather failed: %s", e)
+        return []
 
 @app.post("/weather")
-def add_weather(req:WeatherReq):
+def add_weather(req:WeatherReq, _=Depends(require_admin)):
     chk(req.lat,req.lon,"天氣")
     wid=get_r().add_weather(req.lat,req.lon,req.radius_km,req.rain_level,
                               req.wind_level,req.visibility_level,req.warning_level)
     return {"ok":True,"weather_id":wid,"note":"請呼叫 /dynamic/recompute 套用"}
 
 @app.post("/dynamic/recompute")
-def recompute(req:RecomputeReq):
+def recompute(req:RecomputeReq, _=Depends(require_admin)):
     try:
         get_r().recompute_dynamic_cost(mode=req.mode)
         return {"ok":True,"mode":req.mode,"stats":get_r().stats()}
-    except Exception as e: raise HTTPException(500,str(e))
+    except Exception as e:
+        _log.exception("recompute failed")
+        raise HTTPException(500,"重算動態成本失敗")
 
 @app.post("/route")
 def route(req:RouteReq):
     chk(req.start_lat,req.start_lon,"起點"); chk(req.end_lat,req.end_lon,"終點")
     r=get_r()
     try:
+        if req.start_node and req.start_node not in r._ncoords:
+            raise HTTPException(400,"start_node 不存在於路網中")
+        if req.end_node and req.end_node not in r._ncoords:
+            raise HTTPException(400,"end_node 不存在於路網中")
         sn=({"node_id":req.start_node,"lat":req.start_lat,"lon":req.start_lon}
             if req.start_node else r.nearest_node(req.start_lat,req.start_lon))
         en=({"node_id":req.end_node,"lat":req.end_lat,"lon":req.end_lon}
@@ -270,4 +307,6 @@ def route(req:RouteReq):
                 "analysis_text":OSMRouter.analysis_text(result,sn,en,matched)}
     except HTTPException: raise
     except ValueError as e: raise HTTPException(400,str(e))
-    except Exception as e: raise HTTPException(500,str(e))
+    except Exception as e:
+        _log.exception("route failed")
+        raise HTTPException(500,"路徑計算失敗")

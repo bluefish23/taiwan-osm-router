@@ -17,6 +17,8 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 import requests
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logger = logging.getLogger("realtime_sync")
 
@@ -128,9 +130,8 @@ class CWAClient:
     def __init__(self, api_key: str):
         self.api_key = api_key
         self._session = requests.Session()
+        # CWA server has broken SSL cert (Missing Subject Key Identifier)
         self._session.verify = False
-        import urllib3
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
     def get(self, dataset_id: str) -> Optional[dict]:
         url = f"{CWA_BASE}/{dataset_id}"

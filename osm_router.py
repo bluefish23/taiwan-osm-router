@@ -13,6 +13,8 @@ osm_router.py — 台灣 OSM 動態路由引擎
 from __future__ import annotations
 
 import collections
+import logging
+import threading
 import gc
 import heapq
 import itertools
@@ -49,6 +51,9 @@ INCIDENT_MULT = {
     "accident":1.80,"construction":1.55,"closure":999.0,"congestion":1.35,"manual":1.25,
 }
 RAIN_M,WIND_M,VIS_M,WARN_M = 0.40,0.20,0.35,0.30
+VALID_HIGHWAYS = {"motorway","motorway_link","trunk","trunk_link","primary","primary_link",
+    "secondary","secondary_link","tertiary","tertiary_link","unclassified","residential",
+    "living_street","service","road"}
 MIN_SPEED = 3.0
 MAX_SPEED = 120.0
 SHORT_DIST_KM = 15.0
@@ -63,10 +68,13 @@ def haversine_km(la,loa,lb,lob):
     a=math.sin(dp/2)**2+math.cos(p1)*math.cos(p2)*math.sin(dl/2)**2
     return 2*R*math.asin(math.sqrt(max(0.0,a)))
 
+_log = logging.getLogger(__name__)
+
 def _conn(db_path):
-    c=sqlite3.connect(db_path,check_same_thread=False)
+    c=sqlite3.connect(db_path,timeout=30,check_same_thread=False)
     c.row_factory=sqlite3.Row
     c.execute("PRAGMA journal_mode=WAL")
+    c.execute("PRAGMA busy_timeout=30000")
     c.execute("PRAGMA cache_size=-65536")
     return c
 
@@ -92,6 +100,7 @@ class OSMRouter:
         self._osm_edge_count = 0
         self._edge_index: Dict[str, Tuple[int, int]] = {}
         self._modified_edges: set = set()
+        self._graph_lock = threading.RLock()
 
     def init_dynamic_schema(self):
         with _conn(self.db_path) as conn:
@@ -271,6 +280,13 @@ class OSMRouter:
         raise ValueError(f"找不到 ({lat},{lon}) 附近節點")
 
     def route(self, start_node, end_node, mode="balanced") -> RouteResult:
+        self._graph_lock.acquire()
+        try:
+            return self._route_inner(start_node, end_node, mode)
+        finally:
+            self._graph_lock.release()
+
+    def _route_inner(self, start_node, end_node, mode="balanced") -> RouteResult:
         if not self._graph_loaded:
             raise RuntimeError("請先呼叫 load_graph()")
         sc = self._ncoords.get(start_node)
@@ -341,8 +357,8 @@ class OSMRouter:
     def add_event(self,event_type,severity,lat,lon,radius_km=0.5,highway=None,description=""):
         eid=f"evt_{uuid.uuid4().hex[:12]}"
         with _conn(self.db_path) as conn:
-            conn.execute("INSERT INTO dynamic_events VALUES(?,?,?,?,?,?,?,?,1,?)",
-                (eid,event_type,float(severity),highway,float(lat),float(lon),float(radius_km),description,utc_now()))
+            conn.execute("INSERT INTO dynamic_events VALUES(?,?,?,?,?,?,?,?,1,?,?)",
+                (eid,event_type,float(severity),highway,float(lat),float(lon),float(radius_km),description,utc_now(),"manual"))
             conn.commit()
         return eid
 
@@ -369,7 +385,9 @@ class OSMRouter:
         try:
             with _conn(self.db_path) as conn:
                 return [dict(r) for r in conn.execute("SELECT * FROM dynamic_events WHERE is_active=1 ORDER BY created_at DESC").fetchall()]
-        except: return []
+        except Exception as e:
+            _log.warning("list_events failed: %s", e)
+            return []
 
     def recompute_dynamic_cost(self, mode="balanced"):
         with _conn(self.db_path) as conn:
@@ -381,14 +399,19 @@ class OSMRouter:
                 sev=float(ev["severity"] or 1); etype=ev["event_type"]
                 mult=INCIDENT_MULT.get(etype,1.25)
                 dlat=erad/110.574; dlon=erad/(111.320*math.cos(math.radians(elat)))
-                hwc=f"AND highway='{ev['highway']}'" if ev["highway"] else ""
+                hw=ev["highway"] if ev["highway"] and ev["highway"] in VALID_HIGHWAYS else None
+                bbox=(elat-dlat,elat+dlat,elon-dlon,elon+dlon)
                 if etype=="closure":
-                    cur.execute(f"UPDATE osm_edges SET closure_flag=1,dynamic_mult=999,risk_score=risk_score+100 WHERE lat_a BETWEEN ? AND ? AND lon_a BETWEEN ? AND ? {hwc}",
-                        (elat-dlat,elat+dlat,elon-dlon,elon+dlon))
+                    sql="UPDATE osm_edges SET closure_flag=1,dynamic_mult=999,risk_score=risk_score+100 WHERE lat_a BETWEEN ? AND ? AND lon_a BETWEEN ? AND ?"
+                    params=bbox
+                    if hw: sql+=" AND highway=?"; params=bbox+(hw,)
+                    cur.execute(sql,params)
                 else:
                     ra={"accident":8,"construction":5,"congestion":3,"manual":2}.get(etype,2)*sev
-                    cur.execute(f"UPDATE osm_edges SET dynamic_mult=MAX(dynamic_mult,?),risk_score=risk_score+? WHERE lat_a BETWEEN ? AND ? AND lon_a BETWEEN ? AND ? {hwc}",
-                        (sev*mult,ra,elat-dlat,elat+dlat,elon-dlon,elon+dlon))
+                    sql="UPDATE osm_edges SET dynamic_mult=MAX(dynamic_mult,?),risk_score=risk_score+? WHERE lat_a BETWEEN ? AND ? AND lon_a BETWEEN ? AND ?"
+                    params=(sev*mult,ra)+bbox
+                    if hw: sql+=" AND highway=?"; params=params+(hw,)
+                    cur.execute(sql,params)
             for wx in cur.execute("SELECT * FROM dynamic_weather WHERE is_active=1").fetchall():
                 wlat,wlon,wrad=float(wx["lat"] or 0),float(wx["lon"] or 0),float(wx["radius_km"] or 50)
                 dlat=wrad/110.574; dlon=wrad/(111.320*math.cos(math.radians(wlat)))
@@ -403,6 +426,7 @@ class OSMRouter:
         self._apply_dynamic_to_graph()
 
     def _apply_dynamic_to_graph(self):
+      with self._graph_lock:
         for eid in self._modified_edges:
             loc = self._edge_index.get(eid)
             if loc is None: continue
@@ -433,7 +457,7 @@ class OSMRouter:
             self._modified_edges.add(eid)
 
     def stats(self):
-        s={"db_path":self.db_path,"graph_loaded":self._graph_loaded,
+        s={"db_name":Path(self.db_path).name,"graph_loaded":self._graph_loaded,
            "graph_nodes":self._graph_node_count,
            "graph_edges":self._graph_edge_count,
            "osm_nodes":self._osm_node_count,
@@ -443,7 +467,7 @@ class OSMRouter:
             try:
                 s["active_events"]=cur.execute("SELECT COUNT(*) FROM dynamic_events WHERE is_active=1").fetchone()[0]
                 s["active_weather"]=cur.execute("SELECT COUNT(*) FROM dynamic_weather WHERE is_active=1").fetchone()[0]
-            except: pass
+            except Exception as e: _log.warning("stats query failed: %s", e)
         return s
 
     @staticmethod

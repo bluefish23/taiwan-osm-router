@@ -468,11 +468,17 @@ function initGps(){
   );
 }
 function onGpsPos(pos){
-  const{latitude:lat,longitude:lng,accuracy}=pos.coords;
+  const{latitude:lat,longitude:lng,accuracy,heading:gpsHeading,speed:gpsSpeed}=pos.coords;
+  const prevGps=gpsCoord?{lat:gpsCoord.lat,lon:gpsCoord.lon}:null;
   gpsCoord={lat,lon:lng};
   gpsError=null;
   if(driving){
     if(gpsMarker)gpsMarker.setLatLng([lat,lng]);
+    let bearing=null;
+    if(gpsHeading!=null&&isFinite(gpsHeading)&&gpsSpeed>0.5) bearing=gpsHeading;
+    else if(prevGps&&distBetween(prevGps.lat,prevGps.lon,lat,lng)>0.003)
+      bearing=calcBearing(prevGps.lat,prevGps.lon,lat,lng);
+    if(bearing!=null) gpsMovingBearing=bearing;
   }else{
     if(!gpsMarker){
       gpsMarker=L.circleMarker([lat,lng],{radius:7,fillColor:'#4a9eff',color:'#fff',weight:2,fillOpacity:1,className:'gps-pulse'});
@@ -536,20 +542,25 @@ async function navigate(){
 }
 
 function renderRoute(d){
-  if(routeL){map.removeLayer(routeL);routeL=null;}
+  if(routeL){if(routeL._outline)map.removeLayer(routeL._outline);map.removeLayer(routeL);routeL=null;}
   if(d.geojson?.features?.length){
+    const routeOutline=L.geoJSON(d.geojson,{
+      style:()=>({color:'#1a1a2e',weight:9,opacity:0.6,lineCap:'round',lineJoin:'round'}),
+      interactive:false
+    }).addTo(map);
     routeL=L.geoJSON(d.geojson,{
       style:f=>{
         const hw=f.properties?.highway||'';
-        const c={'motorway':'#00d4ff','trunk':'#00e5a0','primary':'#ffb400',
-                  'secondary':'#a78bfa','tertiary':'#6b7280'}[hw]||'#4a6d99';
-        return{color:c,weight:hw.includes('motorway')||hw.includes('trunk')?5:3,opacity:.85};
+        const c={'motorway':'#00bfff','trunk':'#00e676','primary':'#ffa726',
+                  'secondary':'#ab47bc','tertiary':'#78909c'}[hw]||'#5c8ab5';
+        return{color:c,weight:6,opacity:1,lineCap:'round',lineJoin:'round'};
       },
       onEachFeature:(f,layer)=>{
         const p=f.properties||{};
         layer.bindPopup(`<b>${escHtml(p.name||p.highway||'—')}</b><br>${(p.length_km||0).toFixed(2)} km`);
       }
     }).addTo(map);
+    routeL._outline=routeOutline;
     const b=routeL.getBounds();
     if(b.isValid())map.fitBounds(b.pad(.08));
   }
@@ -579,7 +590,7 @@ function renderRoute(d){
 function closeResult(){document.getElementById('resultPanel').classList.remove('show');}
 function clearRoute(){
   if(driving) stopDriving();
-  if(routeL){map.removeLayer(routeL);routeL=null;}
+  if(routeL){if(routeL._outline)map.removeLayer(routeL._outline);map.removeLayer(routeL);routeL=null;}
   latestRoute=null;
   document.getElementById('resultPanel').classList.remove('show');
   hideMsg();
@@ -596,7 +607,7 @@ function dlAnalysis(){
 let driving=false, driveFollowing=true, driveEdges=[], driveEdgeIdx=0;
 let lastGpsTime=0, lastGpsCoord=null, currentSpeed=0;
 let offRouteCount=0, rerouting=false, lastEventHash='';
-let currentBearing=0;
+let currentBearing=0, gpsMovingBearing=null;
 
 function buildDriveEdges(){
   if(!latestRoute?.edges) return[];
@@ -645,7 +656,7 @@ function stopDriving(){
   offRouteCount=0;
   rerouting=false;
   lastEventHash='';
-  currentBearing=0;
+  currentBearing=0; gpsMovingBearing=null;
   const mapEl=document.getElementById('map');
   mapEl.style.transform='';
   mapEl.classList.remove('heading-up');
@@ -654,12 +665,13 @@ function stopDriving(){
   document.body.classList.remove('driving');
   document.getElementById('driveTurn').textContent='';
   if(routeL){
+    if(routeL._outline)routeL._outline.eachLayer(l=>l.setStyle({opacity:0.6}));
     routeL.eachLayer(layer=>{
       if(layer.feature){
         const hw=layer.feature.properties?.highway||'';
-        const c={'motorway':'#00d4ff','trunk':'#00e5a0','primary':'#ffb400',
-                  'secondary':'#a78bfa','tertiary':'#6b7280'}[hw]||'#4a6d99';
-        layer.setStyle({color:c,opacity:.85,weight:hw.includes('motorway')||hw.includes('trunk')?5:3});
+        const c={'motorway':'#00bfff','trunk':'#00e676','primary':'#ffa726',
+                  'secondary':'#ab47bc','tertiary':'#78909c'}[hw]||'#5c8ab5';
+        layer.setStyle({color:c,opacity:1,weight:6});
       }
     });
     const b=routeL.getBounds();if(b.isValid())map.fitBounds(b.pad(.08));
@@ -708,6 +720,7 @@ function calcBearing(lat1,lon1,lat2,lon2){
 }
 
 function getRouteBearing(){
+  if(gpsMovingBearing!=null) return gpsMovingBearing;
   if(!latestRoute?.edges?.length||!gpsCoord)return currentBearing;
   const snap=findCurrentEdge(gpsCoord.lat,gpsCoord.lon);
   const e=latestRoute.edges[snap.rawIdx];
@@ -806,7 +819,7 @@ function updateRouteProgress(newIdx){
   const greyUpTo=driveEdges[newIdx].rawStart;
   let i=0;
   routeL.eachLayer(layer=>{
-    if(i<greyUpTo)layer.setStyle({color:'#666',opacity:0.3,weight:2});
+    if(i<greyUpTo)layer.setStyle({color:'#888',opacity:0.4,weight:4});
     i++;
   });
 }
@@ -867,7 +880,7 @@ function onDriveGpsUpdate(){
 map.on('dragstart',()=>{
   if(driving){
     driveFollowing=false;
-    currentBearing=0;
+    currentBearing=0; gpsMovingBearing=null;
     document.getElementById('map').style.transform='';
   }
 });

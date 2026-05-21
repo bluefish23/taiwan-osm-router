@@ -71,16 +71,6 @@ run_with_tunnel.bat
 cloudflared tunnel --url http://127.0.0.1:8000
 ```
 
-### Fly.io Deployment
-
-```bash
-fly launch --no-deploy
-fly volumes create osm_data --size 5 --region nrt
-fly secrets set TDX_CLIENT_ID=xxx TDX_CLIENT_SECRET=xxx CWB_API_KEY=xxx ADMIN_TOKEN=xxx
-fly deploy
-# start.sh auto-downloads PBF and builds the graph if DB is missing
-```
-
 ## File Structure
 
 | File | Purpose |
@@ -92,9 +82,6 @@ fly deploy
 | `admin.html` | Admin dashboard — stats, event/weather management, sync control |
 | `build_osm_graph.py` | OSM PBF → SQLite graph builder (offline, run once) |
 | `env.example` | Environment variable template |
-| `Dockerfile` | Container image |
-| `fly.toml` | Fly.io deployment config |
-| `start.sh` | Entrypoint: DB validation + auto PBF download/build + uvicorn |
 
 ## API Endpoints
 

@@ -229,7 +229,7 @@ Configurable via `ALLOWED_ORIGINS` environment variable. Defaults to `*` for dev
 - **Static positions**: VD detector locations cached in `vd_positions` table (~1,361 detectors). Fetched once, reused on subsequent syncs
 - **Live speed matching**: Joins live speed readings with cached positions via VDID
 - **Congestion detection**: When measured speed < 70% of free-flow speed for that road class, creates a congestion event with severity proportional to speed reduction
-- **Top 300**: Only the 300 most severe congestion events are kept per sync cycle
+- **Top 300**: Only the 300 most severe congestion events are kept per sync cycle. Reasons: (1) `recompute_dynamic_cost()` performs a spatial range query on the ~7.65M-edge table for each event — capping at 300 bounds recompute time; (2) candidates are sorted by severity descending, so events beyond 300 have minimal speed reduction (near the 70% threshold) and negligible routing impact; (3) with ~1,361 VD detectors total, typical sync cycles produce ~220 congestion events, so 300 rarely truncates actual data
 
 #### Traffic Incident News
 - Fetches from TDX News/Highway endpoint
@@ -454,10 +454,3 @@ cloudflared tunnel --url http://127.0.0.1:8000
 ```
 Generates a random `*.trycloudflare.com` URL. No account required. Admin endpoints are automatically protected (non-localhost → requires token).
 
-### Cloud (Fly.io)
-
-- Docker container on `shared-cpu-1x` with 2GB RAM
-- 5GB persistent volume for SQLite database
-- Tokyo (nrt) region for low latency to Taiwan
-- Auto-builds graph from PBF on first deploy if DB missing
-- Secrets managed via `fly secrets set`

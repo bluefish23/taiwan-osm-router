@@ -102,7 +102,7 @@ def _iter_blocks(pbf_path: str):
 
 
 # ── Pass 1: Ways ───────────────────────────────────────────────────────
-SIGNAL_HIGHWAY_TAGS = {"traffic_signals", "stop", "crossing"}
+SIGNAL_HIGHWAY_TAGS = {"traffic_signals"}
 
 def pass1_ways(pbf_path: str, verbose: bool = True) -> tuple[dict, set, set]:
     """Extract all highway ways, collect needed node IDs, and detect signal nodes."""

@@ -102,10 +102,13 @@ def _iter_blocks(pbf_path: str):
 
 
 # ── Pass 1: Ways ───────────────────────────────────────────────────────
-def pass1_ways(pbf_path: str, verbose: bool = True) -> tuple[dict, set]:
-    """Extract all highway ways and collect the set of needed node IDs."""
+SIGNAL_HIGHWAY_TAGS = {"traffic_signals", "stop", "crossing"}
+
+def pass1_ways(pbf_path: str, verbose: bool = True) -> tuple[dict, set, set]:
+    """Extract all highway ways, collect needed node IDs, and detect signal nodes."""
     highway_ways: dict = {}
     needed_nodes: set = set()
+    signal_nodes: set = set()
     block_i = 0
 
     for content in _iter_blocks(pbf_path):
@@ -116,6 +119,18 @@ def pass1_ways(pbf_path: str, verbose: bool = True) -> tuple[dict, set]:
 
         for pg_bytes in pb.get(2, []):
             pg = _parse_msg(bytes(pg_bytes))
+
+            for nb in pg.get(1, []):
+                n = _parse_msg(bytes(nb))
+                nid = n.get(1, [None])[0]
+                if nid is None: continue
+                keys = _parse_packed_int(bytes(n[2][0])) if 2 in n else []
+                vals = _parse_packed_int(bytes(n[3][0])) if 3 in n else []
+                for k, v in zip(keys, vals):
+                    if k < len(strings) and v < len(strings):
+                        if strings[k] == "highway" and strings[v] in SIGNAL_HIGHWAY_TAGS:
+                            signal_nodes.add(nid)
+
             for wb in pg.get(3, []):
                 w = _parse_msg(bytes(wb))
                 wid = w.get(1, [None])[0]
@@ -144,9 +159,9 @@ def pass1_ways(pbf_path: str, verbose: bool = True) -> tuple[dict, set]:
 
         if verbose and block_i % 500 == 0:
             print(f"  [P1] block={block_i} ways={len(highway_ways):,} "
-                  f"needed_nodes={len(needed_nodes):,}", flush=True)
+                  f"needed_nodes={len(needed_nodes):,} signals={len(signal_nodes):,}", flush=True)
 
-    return highway_ways, needed_nodes
+    return highway_ways, needed_nodes, signal_nodes
 
 
 # ── Pass 2: Node coordinates ───────────────────────────────────────────
@@ -210,8 +225,10 @@ def parse_maxspeed(s: str) -> float | None:
 
 # ── Pass 3: Build SQLite ───────────────────────────────────────────────
 def pass3_db(db_path: str, highway_ways: dict, node_coords: dict,
-             verbose: bool = True) -> dict:
+             signal_nodes: set | None = None, verbose: bool = True) -> dict:
     """Write osm_nodes and osm_edges to SQLite, return stats dict."""
+    if signal_nodes is None:
+        signal_nodes = set()
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA journal_mode=OFF")
     conn.execute("PRAGMA synchronous=OFF")
@@ -220,7 +237,7 @@ def pass3_db(db_path: str, highway_ways: dict, node_coords: dict,
 
     conn.execute("DROP TABLE IF EXISTS osm_nodes")
     conn.execute("DROP TABLE IF EXISTS osm_edges")
-    conn.execute("CREATE TABLE osm_nodes(node_id INTEGER PRIMARY KEY, lat REAL NOT NULL, lon REAL NOT NULL)")
+    conn.execute("CREATE TABLE osm_nodes(node_id INTEGER PRIMARY KEY, lat REAL NOT NULL, lon REAL NOT NULL, is_signal INTEGER DEFAULT 0)")
     conn.execute("""CREATE TABLE osm_edges(
         edge_id    TEXT PRIMARY KEY,
         way_id     INTEGER NOT NULL,
@@ -235,16 +252,17 @@ def pass3_db(db_path: str, highway_ways: dict, node_coords: dict,
         lat_b REAL, lon_b REAL
     )""")
 
-    if verbose: print(f"  [P3] inserting {len(node_coords):,} nodes...", flush=True)
+    sig_in_graph = signal_nodes & set(node_coords.keys())
+    if verbose: print(f"  [P3] inserting {len(node_coords):,} nodes ({len(sig_in_graph):,} signals)...", flush=True)
     BATCH = 200_000
     buf = []
     for nid, (la, lo) in node_coords.items():
-        buf.append((nid, la, lo))
+        buf.append((nid, la, lo, 1 if nid in signal_nodes else 0))
         if len(buf) >= BATCH:
-            conn.executemany("INSERT INTO osm_nodes VALUES(?,?,?)", buf)
+            conn.executemany("INSERT INTO osm_nodes VALUES(?,?,?,?)", buf)
             conn.commit(); buf = []
     if buf:
-        conn.executemany("INSERT INTO osm_nodes VALUES(?,?,?)", buf)
+        conn.executemany("INSERT INTO osm_nodes VALUES(?,?,?,?)", buf)
         conn.commit()
 
     if verbose: print("  [P3] building edges...", flush=True)
@@ -326,14 +344,19 @@ def main():
     if cache_ways.exists():
         print("載入快取 ways...", flush=True)
         with open(cache_ways, "rb") as f:
-            highway_ways, needed_nodes = pickle.load(f)
+            cached = pickle.load(f)
+            if len(cached) == 3:
+                highway_ways, needed_nodes, signal_nodes = cached
+            else:
+                highway_ways, needed_nodes = cached
+                signal_nodes = set()
     else:
         print("Pass 1: 解析 highway ways...", flush=True)
-        highway_ways, needed_nodes = pass1_ways(pbf)
+        highway_ways, needed_nodes, signal_nodes = pass1_ways(pbf)
         with open(cache_ways, "wb") as f:
-            pickle.dump((highway_ways, needed_nodes), f, protocol=4)
+            pickle.dump((highway_ways, needed_nodes, signal_nodes), f, protocol=4)
     print(f"  ways={len(highway_ways):,}  needed_nodes={len(needed_nodes):,}  "
-          f"t={time.time()-t0:.0f}s", flush=True)
+          f"signals={len(signal_nodes):,}  t={time.time()-t0:.0f}s", flush=True)
 
     if cache_nodes.exists():
         print("載入快取 node coords...", flush=True)
@@ -347,7 +370,7 @@ def main():
     print(f"  node_coords={len(node_coords):,}  t={time.time()-t0:.0f}s", flush=True)
 
     print("Pass 3: 寫入 SQLite...", flush=True)
-    stats = pass3_db(args.db, highway_ways, node_coords)
+    stats = pass3_db(args.db, highway_ways, node_coords, signal_nodes)
     print(f"\n建圖完成！")
     print(f"  nodes   : {stats['nodes']:,}")
     print(f"  edges   : {stats['edges']:,}")

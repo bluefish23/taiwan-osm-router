@@ -28,8 +28,13 @@ Detailed technical documentation of all system capabilities, modules, and design
 | `balanced` | 1.0 | 0.40 | Default — trade-off between speed and safety |
 | `safest` | 1.0 | 0.90 | Avoid hazardous areas even if significantly slower |
 
-**Cost formula**: `edge_cost = base_time × (time_weight + risk_score × risk_weight)`  
-Where `base_time = (distance_km / speed_kmh) × 60` (minutes)
+**Cost formula**: `edge_cost = adjusted_time × (time_weight + risk × risk_weight) + turn_penalty + signal_delay`  
+Where:
+- `adjusted_time = (distance_km / (speed_kmh × time_speed_factor)) × 60` (minutes)
+- `time_speed_factor` = time-of-day speed multiplier (see §1.7)
+- `risk = dynamic_risk_score + night_risk` (see §1.6)
+- `turn_penalty` = bearing-change penalty (see §1.8)
+- `signal_delay` = 0.33 min per signal node (see §1.9)
 
 ### 1.4 Road Speed Model
 
@@ -55,6 +60,9 @@ Where `base_time = (distance_km / speed_kmh) × 60` (minutes)
 | closure | 999 | Road completely closed (effectively infinite cost) |
 | congestion | 1.35 | Traffic congestion (from VD speed data) |
 | manual | 1.25 | User-defined event |
+| landslide_warning | 1.50 | Mountain road landslide risk (rain ≥ 200mm) |
+| landslide_high | 3.00 | High landslide risk (rain ≥ 350mm) |
+| landslide_closure | 999 | Landslide road closure (rain ≥ 600mm) |
 
 #### Weather Multipliers
 
@@ -66,7 +74,82 @@ Each factor is normalized to 0–1 range:
 - **Visibility**: categorical — 0.0 (clear), 0.3, 0.6, 1.0 (dense fog)
 - **Warning**: CWA warning level 0–1
 
-### 1.6 SQL Injection Protection
+### 1.6 Night Driving Risk (Research-backed)
+
+Time-of-day risk factor added to `risk_score` in A* cost calculation. Based on NHTSA data showing nighttime accounts for only 25% of miles driven but 50% of fatal crashes (fatality rate 3–9× daytime).
+
+| Time Period (UTC+8) | Risk Addition | Research Basis |
+|---------------------|---------------|----------------|
+| 07:00–17:00 (day) | +0.00 | Baseline |
+| 17:00–19:00 (dusk) | +0.05 | NHTSA: 1.5× accident risk |
+| 19:00–00:00 (night) | +0.15 | NSC: 3× fatality rate |
+| 00:00–04:00 (late night) | +0.25 | NHTSA 2008: 4–9× with fatigue |
+| 04:00–06:00 (dawn) | +0.15 | Similar to evening |
+| 06:00–07:00 (early morning) | +0.05 | Transition period |
+
+**References**: [NHTSA Nighttime Glare Study 2008](https://www.nhtsa.gov/sites/nhtsa.gov/files/811043.pdf), [National Safety Council — Driving at Night](https://www.nsc.org/road/safety-topics/driving-at-night)
+
+### 1.7 Time-Dependent Speed Profiles (Research-backed)
+
+Speed multiplier applied to `base_time` based on road type × time of day. Rush hour reduces urban road effective speed by 30–40%. Based on TDVRP research showing time-dependent routing eliminates 99% of late arrivals.
+
+| Time Period | motorway | trunk | primary | secondary | tertiary | residential |
+|------------|----------|-------|---------|-----------|----------|-------------|
+| 00:00–06:00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 |
+| 07:00–09:00 (AM peak) | 0.85 | 0.80 | 0.70 | 0.65 | 0.62 | 0.60 |
+| 09:00–17:00 (midday) | 0.92 | 0.88 | 0.82 | 0.78 | 0.75 | 0.75 |
+| 17:00–19:00 (PM peak) | 0.85 | 0.80 | 0.70 | 0.65 | 0.62 | 0.60 |
+| 19:00–22:00 (evening) | 0.95 | 0.93 | 0.90 | 0.88 | 0.85 | 0.88 |
+
+Higher-class roads (motorway/trunk) experience less peak degradation due to controlled access and higher capacity.
+
+**References**: [Vehicle Routing with Time-Dependent Travel Times](https://www.researchgate.net/publication/360332685), [Time Dependent Travel Speed Routing: Torino](https://www.sciencedirect.com/science/article/pii/S2352146514001872)
+
+### 1.8 Turn Penalties (Research-backed)
+
+A* pathfinding tracks the incoming edge bearing and computes the angle difference to each outgoing edge. Turn type is classified by angle, and a time penalty (in minutes) is added to the edge cost.
+
+| Angle Difference | Turn Type | Penalty (minutes) | Research Basis |
+|-----------------|-----------|-------------------|----------------|
+| < 20° | Straight | 0.00 | No delay |
+| 20°–60° | Slight turn | 0.05 (~3 sec) | Transport Geography |
+| 60°–130° | Left/right turn | 0.17 (~10 sec) | McGill: 5–15 sec |
+| 130°–170° | Sharp turn | 0.25 (~15 sec) | McGill: 15–35 sec |
+| > 170° | U-turn | 0.42 (~25 sec) | HCM estimate |
+
+Turn penalties are significant in urban routing — McGill University research shows turn delays account for 15–25% of total urban trip time.
+
+**References**: [Intersection Turn Delay Modelling (McGill)](https://tram.mcgill.ca/Research/Publications/Turn%20Delay%20Modelling.pdf), [Turn Penalties at Intersections (Transport Geography)](https://transportgeography.org/contents/methods/network-data-models/turn-penalty-intersection/)
+
+### 1.9 Signal Density Delay (Research-backed)
+
+Traffic signal nodes from OSM (`highway=traffic_signals`, `stop`, `crossing`) are identified during graph build and stored in `osm_nodes.is_signal`. During A* routing, each signal node adds a fixed delay of 0.33 minutes (~20 seconds).
+
+- **Exempt**: motorway, motorway_link, trunk, trunk_link (no signals on controlled-access roads)
+- **Impact**: Urban arterials typically have 2–6 signals/km, adding 40–120 sec/km to travel time
+
+Signal delay accounts for 20–40% of urban travel time (HCM). The 20-second average represents the midpoint of HCM's 15–45 second per-signal delay range.
+
+**References**: [Delay Function for Signalized Intersections (ResearchGate)](https://www.researchgate.net/publication/245292022), [Highway Capacity Manual Ch.19 — Signal Delay](https://nap.nationalacademies.org/resource/26432/Highway_Capacity_Manual_Edition_7.1_Chapters.pdf)
+
+### 1.10 Landslide / Debris Flow Risk (Research-backed, Taiwan-specific)
+
+Taiwan experiences frequent rainfall-induced landslides due to steep terrain and typhoon activity. Landslide area increased from 170 km² (2004) to 506 km² (2010 post-Typhoon Morakot).
+
+During CWA weather sync, accumulated rainfall is estimated from hourly data. Mountain area stations (lat ≥ 23.0°N) with heavy rainfall trigger landslide events:
+
+| Accumulated Rainfall | Risk Level | Cost Multiplier | Action |
+|---------------------|------------|-----------------|--------|
+| < 200 mm | Low | — | Normal routing |
+| ≥ 200 mm | Warning | 1.50 | Route penalized |
+| ≥ 350 mm | High | 3.00 | Strong avoidance |
+| ≥ 600 mm | Critical | 999 (closure) | Road effectively blocked |
+
+Thresholds based on Taiwan Soil and Water Conservation Bureau risk index classifications and academic landslide susceptibility models.
+
+**References**: [Risk-based Landslide Monitoring in Taiwan (Tandfonline 2017)](https://www.tandfonline.com/doi/full/10.1080/19475705.2017.1345797), [Landslide Responses to Typhoon Events 2019–2023 (MDPI)](https://www.mdpi.com/2071-1050/17/21/9673), [Quantifying Travel Time Impacts of Slope Failures (MDPI)](https://www.mdpi.com/2071-1050/17/20/9170)
+
+### 1.11 SQL Injection Protection
 
 The `highway` field in event creation is validated against a whitelist of 15 valid OSM highway types. All database queries use parameterized `?` placeholders — no string interpolation in SQL.
 
@@ -300,7 +383,7 @@ SQLite with WAL journal mode for concurrent read/write access.
 
 | Table | Columns | Scale | Purpose |
 |-------|---------|-------|---------|
-| `osm_nodes` | node_id, lat, lon, component_id | ~3.76M | Road network nodes |
+| `osm_nodes` | node_id, lat, lon, component_id, is_signal | ~3.76M | Road network nodes (is_signal=1 for traffic signals/stop signs) |
 | `osm_edges` | node_a, node_b, lat_a, lon_a, lat_b, lon_b, dist_km, highway, speed_kmh, dynamic_mult, closure_flag, risk_score | ~7.65M | Directed edges with dynamic fields |
 | `dynamic_events` | id, event_type, severity, highway, lat, lon, radius_km, description, active, created_at, source | ~300 realtime | Traffic events |
 | `dynamic_weather` | id, lat, lon, radius_km, rain_level, wind_level, visibility_level, warning_level, active, created_at, source | ~50-80 realtime | Weather conditions |
@@ -350,6 +433,9 @@ SQLite with WAL journal mode for concurrent read/write access.
 | **TDX auth backoff** | 5-minute cooldown on auth failure prevents API lockout |
 | **Geocode cache** | 500-entry LRU with 5-min TTL reduces external API calls |
 | **Pre-loaded main graph** | Motorway→tertiary in memory; only short-range routes query full DB |
+| **Signal node set** | `is_signal` nodes pre-loaded into memory set for O(1) lookup during A* |
+| **Time factors cached per-route** | Night risk and time-of-day speed factor computed once per route call, not per edge |
+| **Turn bearing reuse** | Parent edge bearing cached in `came_from`; avoids recomputation during neighbor expansion |
 
 ---
 

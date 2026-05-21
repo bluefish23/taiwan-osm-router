@@ -57,6 +57,14 @@ NEWS_SEVERITY = {
     "congestion": 0.5,
 }
 
+LANDSLIDE_THRESHOLDS = [
+    (600, 1.0,  999.0, "landslide_closure"),
+    (350, 0.85, 3.0,   "landslide_high"),
+    (200, 0.6,  1.5,   "landslide_warning"),
+]
+MOUNTAIN_LAT_MIN = 23.0
+MOUNTAIN_RAIN_RADIUS_KM = 8.0
+
 
 def _utc_now():
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
@@ -539,5 +547,31 @@ class RealtimeSyncer:
                 conn.executemany(
                     "INSERT INTO dynamic_weather VALUES(?,?,?,?,?,?,?,?,?,?,?)", rows)
                 conn.commit()
-        logger.info("CWA weather: %d stations with impact", count)
+
+        ls_count = self._check_landslide_risk(rain_map)
+        logger.info("CWA weather: %d stations with impact, %d landslide events", count, ls_count)
         return count
+
+    def _check_landslide_risk(self, rain_map: dict) -> int:
+        ls_rows = []
+        now = _utc_now()
+        for sid, info in rain_map.items():
+            lat, lon = info["lat"], info["lon"]
+            rain_1hr = info["rain_1hr"]
+            if lat < MOUNTAIN_LAT_MIN and rain_1hr < 30:
+                continue
+            accum = rain_1hr * 6
+            for threshold, severity, mult, etype in LANDSLIDE_THRESHOLDS:
+                if accum >= threshold:
+                    eid = f"rt_ls_{uuid.uuid4().hex[:10]}"
+                    desc = f"山崩風險: 累積雨量≈{accum:.0f}mm ({etype})"
+                    ls_rows.append((eid, etype, severity, None,
+                                    lat, lon, MOUNTAIN_RAIN_RADIUS_KM,
+                                    desc, 1, now, "realtime"))
+                    break
+        if ls_rows:
+            with _conn(self.router.db_path) as conn:
+                conn.executemany(
+                    "INSERT INTO dynamic_events VALUES(?,?,?,?,?,?,?,?,?,?,?)", ls_rows)
+                conn.commit()
+        return len(ls_rows)

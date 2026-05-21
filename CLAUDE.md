@@ -63,13 +63,16 @@ uvicorn osm_api:app --host 127.0.0.1 --port 8000
   - `fastest` — time=1.0, risk=0.10（最快到達）
   - `balanced` — time=1.0, risk=0.40（平衡速度與安全）
   - `safest` — time=1.0, risk=0.90（優先安全）
-- **成本公式**：`edge_cost = base_cost × (time_weight + risk_score × risk_weight)`
-  - `base_cost = (distance_km / speed_kmh) × 60` (分鐘)
-  - `risk_score` 由事件和天氣動態累加
-- **事件成本乘數**：accident=1.80, construction=1.55, closure=999, congestion=1.35, manual=1.25
+- **成本公式**：`edge_cost = adj_time × (time_weight + risk × risk_weight) + turn_penalty + signal_delay`
+  - `adj_time = (dist / (speed × time_factor)) × 60` (分鐘，time_factor 為時段速度乘數)
+  - `risk = dynamic_risk + night_risk`（夜間 +0.05~0.25）
+  - `turn_penalty`：轉彎延遲（直行 0s, 左右轉 10s, U-turn 25s）
+  - `signal_delay`：每個號誌路口 +20s（高速公路免計）
+- **事件成本乘數**：accident=1.80, construction=1.55, closure=999, congestion=1.35, manual=1.25, landslide_warning=1.5, landslide_high=3.0, landslide_closure=999
 - **天氣成本乘數**：`1.0 + 0.40×rain + 0.20×wind + 0.35×visibility + 0.30×warning`
+- **時段速度**：尖峰 (7-9, 17-19) motorway ×0.85, primary ×0.70, tertiary ×0.62；離峰 ×1.0
 - **道路速度**：motorway=110, trunk=90, primary=60, secondary=50, tertiary=40, residential=30 km/h
-- **重要**：道路類別本身沒有 risk 差異，risk 純粹來自動態事件和天氣
+- **重要**：道路類別本身沒有 risk 差異，risk 來自動態事件、天氣和時段
 
 ### realtime_sync.py — 即時同步引擎
 
@@ -77,7 +80,8 @@ uvicorn osm_api:app --host 127.0.0.1 --port 8000
 - **CWAClient**：API Key 認證，SSL verify=False（CWA 憑證問題）
 - **VD 車速同步**：19 縣市逐城市呼叫，靜態位置快取到 `vd_positions` 表，即時速度與位置 JOIN，速度 < 自由流速 70% 建立壅塞事件，取前 300 筆
 - **路況新聞**：TDX News/Highway 端點，依 NewsCategory 對應事件類型
-- **氣象同步**：自動氣象站 + 雨量站，正規化為 0~1（rain: /80mm, wind: (v-5)/25, visibility: 分級）
+- **氣象同步**：自動氣象站 + 雨量站，正規化為 0~1（rain: /80mm, wind: (v-8)/22, visibility: 分級）
+- **山崩偵測**：累積雨量 ≥200mm 建立 landslide 事件（warning/high/closure 三級），針對山區測站（lat ≥ 23.0°N）
 - **source 欄位區分**：即時資料 `source='realtime'`（每次同步前清除），手動資料 `source='manual'`（不受影響）
 - **同步間隔**：預設 300 秒，可由 `AUTO_SYNC_INTERVAL` 環境變數設定
 

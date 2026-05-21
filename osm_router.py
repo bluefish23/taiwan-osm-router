@@ -22,7 +22,7 @@ import math
 import sqlite3
 import uuid
 from collections import namedtuple
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -49,6 +49,7 @@ MODE_WEIGHTS = {
 }
 INCIDENT_MULT = {
     "accident":1.80,"construction":1.55,"closure":999.0,"congestion":1.35,"manual":1.25,
+    "landslide_closure":999.0,"landslide_high":3.0,"landslide_warning":1.5,
 }
 RAIN_M,WIND_M,VIS_M,WARN_M = 0.40,0.20,0.35,0.30
 VALID_HIGHWAYS = {"motorway","motorway_link","trunk","trunk_link","primary","primary_link",
@@ -59,6 +60,50 @@ MAX_SPEED = 120.0
 SHORT_DIST_KM = 15.0
 _CTR = itertools.count()
 
+NIGHT_RISK = {
+    (0,4): 0.25, (4,6): 0.15, (6,7): 0.05,
+    (7,17): 0.0, (17,19): 0.05, (19,24): 0.15,
+}
+
+_TW_UTC_OFFSET = timedelta(hours=8)
+
+def _tw_hour() -> int:
+    return (datetime.now(timezone.utc) + _TW_UTC_OFFSET).hour
+
+def _night_risk_score() -> float:
+    h = _tw_hour()
+    for (lo, hi), risk in NIGHT_RISK.items():
+        if lo <= h < hi:
+            return risk
+    return 0.0
+
+TIME_SPEED_MULT: dict[str, dict[tuple[int,int], float]] = {
+    "motorway":     {(0,6):1.0,(6,7):0.95,(7,9):0.85,(9,17):0.92,(17,19):0.85,(19,22):0.95,(22,24):1.0},
+    "motorway_link":{(0,6):1.0,(6,7):0.95,(7,9):0.85,(9,17):0.92,(17,19):0.85,(19,22):0.95,(22,24):1.0},
+    "trunk":        {(0,6):1.0,(6,7):0.92,(7,9):0.80,(9,17):0.88,(17,19):0.80,(19,22):0.93,(22,24):1.0},
+    "trunk_link":   {(0,6):1.0,(6,7):0.92,(7,9):0.80,(9,17):0.88,(17,19):0.80,(19,22):0.93,(22,24):1.0},
+    "primary":      {(0,6):1.0,(6,7):0.88,(7,9):0.70,(9,17):0.82,(17,19):0.70,(19,22):0.90,(22,24):1.0},
+    "primary_link": {(0,6):1.0,(6,7):0.88,(7,9):0.70,(9,17):0.82,(17,19):0.70,(19,22):0.90,(22,24):1.0},
+    "secondary":    {(0,6):1.0,(6,7):0.85,(7,9):0.65,(9,17):0.78,(17,19):0.65,(19,22):0.88,(22,24):1.0},
+    "secondary_link":{(0,6):1.0,(6,7):0.85,(7,9):0.65,(9,17):0.78,(17,19):0.65,(19,22):0.88,(22,24):1.0},
+    "tertiary":     {(0,6):1.0,(6,7):0.82,(7,9):0.62,(9,17):0.75,(17,19):0.62,(19,22):0.85,(22,24):1.0},
+    "tertiary_link":{(0,6):1.0,(6,7):0.82,(7,9):0.62,(9,17):0.75,(17,19):0.62,(19,22):0.85,(22,24):1.0},
+}
+_DEFAULT_TIME_MULT = {(0,6):1.0,(6,7):0.85,(7,9):0.60,(9,17):0.75,(17,19):0.60,(19,22):0.88,(22,24):1.0}
+
+def _time_speed_factor(highway: str) -> float:
+    h = _tw_hour()
+    table = TIME_SPEED_MULT.get(highway, _DEFAULT_TIME_MULT)
+    for (lo, hi), m in table.items():
+        if lo <= h < hi:
+            return m
+    return 1.0
+
+TURN_PENALTY_MIN = {
+    "straight": 0.0, "slight": 0.05, "turn": 0.17, "sharp": 0.25, "uturn": 0.42,
+}
+SIGNAL_DELAY_MIN = 0.33
+
 
 def utc_now(): return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -67,6 +112,20 @@ def haversine_km(la,loa,lb,lob):
     dp,dl=math.radians(lb-la),math.radians(lob-loa)
     a=math.sin(dp/2)**2+math.cos(p1)*math.cos(p2)*math.sin(dl/2)**2
     return 2*R*math.asin(math.sqrt(max(0.0,a)))
+
+def _bearing(la,loa,lb,lob):
+    dlon=math.radians(lob-loa)
+    y=math.sin(dlon)*math.cos(math.radians(lb))
+    x=math.cos(math.radians(la))*math.sin(math.radians(lb))-math.sin(math.radians(la))*math.cos(math.radians(lb))*math.cos(dlon)
+    return math.degrees(math.atan2(y,x))%360
+
+def _turn_type(angle_diff: float) -> str:
+    a = abs(angle_diff)
+    if a < 20: return "straight"
+    if a < 60: return "slight"
+    if a < 130: return "turn"
+    if a < 170: return "sharp"
+    return "uturn"
 
 _log = logging.getLogger(__name__)
 
@@ -100,6 +159,7 @@ class OSMRouter:
         self._osm_edge_count = 0
         self._edge_index: Dict[str, Tuple[int, int]] = {}
         self._modified_edges: set = set()
+        self._signal_nodes: set = set()
         self._graph_lock = threading.RLock()
 
     def init_dynamic_schema(self):
@@ -113,12 +173,14 @@ class OSMRouter:
             cur.execute("""CREATE TABLE IF NOT EXISTS dynamic_events(
                 event_id TEXT PRIMARY KEY,event_type TEXT,severity REAL,highway TEXT,
                 lat REAL,lon REAL,radius_km REAL DEFAULT 0.5,
-                description TEXT,is_active INTEGER DEFAULT 1,created_at TEXT)""")
+                description TEXT,is_active INTEGER DEFAULT 1,created_at TEXT,
+                source TEXT DEFAULT 'manual')""")
             cur.execute("""CREATE TABLE IF NOT EXISTS dynamic_weather(
                 weather_id TEXT PRIMARY KEY,lat REAL,lon REAL,radius_km REAL DEFAULT 50,
                 rain_level REAL DEFAULT 0,wind_level REAL DEFAULT 0,
                 visibility_level REAL DEFAULT 0,warning_level REAL DEFAULT 0,
-                is_active INTEGER DEFAULT 1,updated_at TEXT)""")
+                is_active INTEGER DEFAULT 1,updated_at TEXT,
+                source TEXT DEFAULT 'manual')""")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_edges_latlon ON osm_edges(lat_a, lon_a)")
             conn.commit()
 
@@ -220,6 +282,7 @@ class OSMRouter:
         self._graph_node_count = len(graph)
         self._graph_edge_count = kept_edges
         self._graph_loaded = True
+        self._load_signal_nodes()
         gc.collect()
         import threading
         def _count():
@@ -227,8 +290,20 @@ class OSMRouter:
                 self._osm_node_count=conn.execute("SELECT COUNT(*) FROM osm_nodes").fetchone()[0]
                 self._osm_edge_count=conn.execute("SELECT COUNT(*) FROM osm_edges").fetchone()[0]
         threading.Thread(target=_count, daemon=True).start()
-        if verbose: print(f"  {len(graph):,} 節點，{kept_edges:,} 邊  ({time.time()-t0:.1f}s)",flush=True)
+        if verbose: print(f"  {len(graph):,} 節點，{kept_edges:,} 邊，{len(self._signal_nodes):,} 號誌  ({time.time()-t0:.1f}s)",flush=True)
         return kept_edges
+
+    def _load_signal_nodes(self):
+        try:
+            with _conn(self.db_path) as conn:
+                cols = {r["name"] for r in conn.execute("PRAGMA table_info(osm_nodes)").fetchall()}
+                if "is_signal" in cols:
+                    rows = conn.execute("SELECT node_id FROM osm_nodes WHERE is_signal=1").fetchall()
+                    self._signal_nodes = {r[0] for r in rows}
+                    return
+        except Exception:
+            pass
+        self._signal_nodes = set()
 
     def _has_component_id(self) -> bool:
         with _conn(self.db_path) as conn:
@@ -298,6 +373,8 @@ class OSMRouter:
         direct_km = haversine_km(s_la, s_lo, e_la, e_lo)
         graph = self._graph
         w = MODE_WEIGHTS.get(mode, MODE_WEIGHTS["balanced"])
+        night_r = _night_risk_score()
+        sig_nodes = self._signal_nodes
 
         def h(nid):
             la, lo = self._ncoords.get(nid, (e_la, e_lo))
@@ -320,7 +397,8 @@ class OSMRouter:
                 cur = end_node
                 while cur in came_from:
                     prev, e = came_from[cur]
-                    seg_min = (e.dist / max(e.spd, MIN_SPEED)) * 60
+                    tsf = _time_speed_factor(e.hw)
+                    seg_min = (e.dist / max(e.spd * tsf, MIN_SPEED)) * 60
                     edges.append({
                         "edge_id": e.eid, "highway": e.hw, "name": e.name,
                         "length_km": e.dist, "speed_kmh": e.spd,
@@ -337,11 +415,31 @@ class OSMRouter:
                 return RouteResult(nodes, edges, tot_km, tot_min, g, mode)
             if g > best.get(node, float("inf")):
                 continue
+
+            prev_entry = came_from.get(node)
+            prev_bearing = None
+            if prev_entry is not None:
+                pe = prev_entry[1]
+                prev_bearing = _bearing(pe.la, pe.loa, pe.lb, pe.lob)
+
             for e in graph.get(node, []):
                 nxt = e.to
-                ec2 = e.cost * (w["time"] + e.risk * w["risk"])
+                tsf = _time_speed_factor(e.hw)
+                adj_cost = (e.dist / max(e.spd * tsf, MIN_SPEED)) * 60
+                risk = e.risk + night_r
+                ec2 = adj_cost * (w["time"] + risk * w["risk"])
                 if ec2 >= 1e8:
                     continue
+
+                if prev_bearing is not None:
+                    cur_bearing = _bearing(e.la, e.loa, e.lb, e.lob)
+                    diff = (cur_bearing - prev_bearing + 180) % 360 - 180
+                    tp = TURN_PENALTY_MIN.get(_turn_type(diff), 0.0)
+                    ec2 += tp
+
+                if nxt in sig_nodes and e.hw not in ("motorway","motorway_link","trunk","trunk_link"):
+                    ec2 += SIGNAL_DELAY_MIN
+
                 ng = g + ec2
                 if ng >= best.get(nxt, float("inf")):
                     continue
@@ -376,8 +474,8 @@ class OSMRouter:
     def add_weather(self,lat,lon,radius_km=50.0,rain=0,wind=0,visibility=0,warning=0):
         wid=f"wx_{uuid.uuid4().hex[:12]}"
         with _conn(self.db_path) as conn:
-            conn.execute("INSERT INTO dynamic_weather VALUES(?,?,?,?,?,?,?,?,1,?)",
-                (wid,float(lat),float(lon),float(radius_km),float(rain),float(wind),float(visibility),float(warning),utc_now()))
+            conn.execute("INSERT INTO dynamic_weather VALUES(?,?,?,?,?,?,?,?,1,?,?)",
+                (wid,float(lat),float(lon),float(radius_km),float(rain),float(wind),float(visibility),float(warning),utc_now(),"manual"))
             conn.commit()
         return wid
 
@@ -401,13 +499,14 @@ class OSMRouter:
                 dlat=erad/110.574; dlon=erad/(111.320*math.cos(math.radians(elat)))
                 hw=ev["highway"] if ev["highway"] and ev["highway"] in VALID_HIGHWAYS else None
                 bbox=(elat-dlat,elat+dlat,elon-dlon,elon+dlon)
-                if etype=="closure":
+                if etype in ("closure", "landslide_closure"):
                     sql="UPDATE osm_edges SET closure_flag=1,dynamic_mult=999,risk_score=risk_score+100 WHERE lat_a BETWEEN ? AND ? AND lon_a BETWEEN ? AND ?"
                     params=bbox
                     if hw: sql+=" AND highway=?"; params=bbox+(hw,)
                     cur.execute(sql,params)
                 else:
-                    ra={"accident":8,"construction":5,"congestion":3,"manual":2}.get(etype,2)*sev
+                    ra={"accident":8,"construction":5,"congestion":3,"manual":2,
+                        "landslide_warning":6,"landslide_high":10}.get(etype,2)*sev
                     sql="UPDATE osm_edges SET dynamic_mult=MAX(dynamic_mult,?),risk_score=risk_score+? WHERE lat_a BETWEEN ? AND ? AND lon_a BETWEEN ? AND ?"
                     params=(sev*mult,ra)+bbox
                     if hw: sql+=" AND highway=?"; params=params+(hw,)
@@ -486,6 +585,9 @@ class OSMRouter:
     def analysis_text(result, sn, en, events):
         from collections import Counter
         hw=Counter(e.get("highway","?") for e in result.edges)
+        nr = _night_risk_score()
+        tw_h = _tw_hour()
+        time_label = "深夜" if tw_h<4 else "凌晨" if tw_h<6 else "早尖峰" if tw_h<9 else "日間" if tw_h<17 else "晚尖峰" if tw_h<19 else "夜間"
         lines=["="*52,"台灣 OSM 動態路徑分析報告","="*52,
                f"模式：{result.mode}",
                f"起點：{sn.get('node_id')} ({sn.get('lat',0):.5f},{sn.get('lon',0):.5f})",
@@ -493,7 +595,9 @@ class OSMRouter:
                f"總距離：{result.total_km:.2f} km",
                f"預估時間：{result.total_min:.0f} 分鐘 ({result.total_min/60:.1f} hr)",
                f"路段數：{len(result.edges)}",
-               f"道路類型：{dict(hw.most_common(6))}","─"*52]
+               f"道路類型：{dict(hw.most_common(6))}",
+               f"時段：{time_label} ({tw_h}:00 UTC+8)，夜間風險 +{nr:.0%}",
+               "─"*52]
         prev=None; km=mn=0; segs=[]
         for e in result.edges:
             nm=e.get("name") or e.get("highway") or "—"

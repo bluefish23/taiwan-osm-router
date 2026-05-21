@@ -331,20 +331,27 @@ class OSMRouter:
             self._ncoords.setdefault(tn, (lb, lob))
         return local, None
 
+    _MOTORWAY_HW = {"motorway", "motorway_link", "trunk", "trunk_link"}
+
     def nearest_node(self, lat, lon, prefer_major=True) -> dict:
         dlat = dlon = 0.005
         with _conn(self.db_path) as conn:
             cur = conn.cursor()
             for _ in range(8):
                 rows = cur.execute(
-                    "SELECT node_id,lat,lon FROM osm_nodes "
-                    "WHERE lat BETWEEN ? AND ? AND lon BETWEEN ? AND ?",
+                    "SELECT n.node_id, n.lat, n.lon, "
+                    "  (SELECT e.highway FROM osm_edges e "
+                    "   WHERE e.from_node=n.node_id LIMIT 1) AS hw "
+                    "FROM osm_nodes n "
+                    "WHERE n.lat BETWEEN ? AND ? AND n.lon BETWEEN ? AND ?",
                     (lat - dlat, lat + dlat, lon - dlon, lon + dlon),
                 ).fetchall()
                 if prefer_major and self._graph_loaded:
-                    valid = [r for r in rows if r["node_id"] in self._graph]
-                    if valid:
-                        b = min(valid, key=lambda r: haversine_km(lat, lon, r["lat"], r["lon"]))
+                    in_graph = [r for r in rows if r["node_id"] in self._graph]
+                    non_hw = [r for r in in_graph if r["hw"] not in self._MOTORWAY_HW]
+                    pool = non_hw if non_hw else in_graph
+                    if pool:
+                        b = min(pool, key=lambda r: haversine_km(lat, lon, r["lat"], r["lon"]))
                         return {"node_id": b["node_id"], "lat": float(b["lat"]), "lon": float(b["lon"]),
                                 "distance_km": haversine_km(lat, lon, b["lat"], b["lon"])}
                 elif rows:
@@ -364,14 +371,36 @@ class OSMRouter:
     def _route_inner(self, start_node, end_node, mode="balanced") -> RouteResult:
         if not self._graph_loaded:
             raise RuntimeError("請先呼叫 load_graph()")
-        sc = self._ncoords.get(start_node)
-        ec = self._ncoords.get(end_node)
-        if sc is None or ec is None:
-            raise ValueError("起點或終點不在主幹路網中。請嘗試在主要道路旁的座標。")
-        s_la, s_lo = sc
-        e_la, e_lo = ec
-        direct_km = haversine_km(s_la, s_lo, e_la, e_lo)
         graph = self._graph
+
+        anchor_coords = []
+        for nid in (start_node, end_node):
+            c = self._ncoords.get(nid)
+            if c is None:
+                with _conn(self.db_path) as conn:
+                    r = conn.execute("SELECT lat, lon FROM osm_nodes WHERE node_id=?", (nid,)).fetchone()
+                if r is None:
+                    raise ValueError(f"節點 {nid} 不存在於路網中。")
+                c = (float(r["lat"]), float(r["lon"]))
+                self._ncoords[nid] = c
+            anchor_coords.append(c)
+        (s_la, s_lo), (e_la, e_lo) = anchor_coords
+        direct_km = haversine_km(s_la, s_lo, e_la, e_lo)
+
+        LOCAL_PAD = 0.02
+        for anchor_la, anchor_lo in ((s_la, s_lo), (e_la, e_lo)):
+            bbox = (anchor_la - LOCAL_PAD, anchor_lo - LOCAL_PAD,
+                    anchor_la + LOCAL_PAD, anchor_lo + LOCAL_PAD)
+            local, _ = self._load_local_graph(bbox, pad=0.005)
+            for fn, edges in local.items():
+                if fn not in graph:
+                    graph[fn] = edges
+                else:
+                    existing_eids = {e.eid for e in graph[fn]}
+                    for e in edges:
+                        if e.eid not in existing_eids:
+                            graph[fn].append(e)
+
         w = MODE_WEIGHTS.get(mode, MODE_WEIGHTS["balanced"])
         night_r = _night_risk_score()
         sig_nodes = self._signal_nodes

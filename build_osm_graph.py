@@ -131,6 +131,25 @@ def pass1_ways(pbf_path: str, verbose: bool = True) -> tuple[dict, set, set]:
                         if strings[k] == "highway" and strings[v] in SIGNAL_HIGHWAY_TAGS:
                             signal_nodes.add(nid)
 
+            if 2 in pg:
+                dn = _parse_msg(bytes(pg[2][0]))
+                ir = dn.get(1, [None])[0]
+                kv_raw = dn.get(10, [None])[0]
+                if ir is not None and kv_raw is not None:
+                    ids_d = _parse_packed_sint(bytes(ir))
+                    kv_list = _parse_packed_int(bytes(kv_raw))
+                    acc_id = 0; ki = 0
+                    for did in ids_d:
+                        acc_id += did
+                        while ki < len(kv_list) and kv_list[ki] != 0:
+                            k, v = kv_list[ki], kv_list[ki+1]
+                            if k < len(strings) and v < len(strings):
+                                if strings[k] == "highway" and strings[v] in SIGNAL_HIGHWAY_TAGS:
+                                    signal_nodes.add(acc_id)
+                            ki += 2
+                        if ki < len(kv_list):
+                            ki += 1
+
             for wb in pg.get(3, []):
                 w = _parse_msg(bytes(wb))
                 wid = w.get(1, [None])[0]

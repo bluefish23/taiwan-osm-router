@@ -339,7 +339,7 @@ const API_BASE=(window.__API_BASE||location.origin).replace(/\/$/,'');
 function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 let mode='balanced', clickPhase='start';
 let startCoord=null, endCoord=null;
-let startM=null, endM=null, routeL=null, latestRoute=null;
+let startM=null, endM=null, routeL=null, latestRoute=null, altRouteLayers=[];
 let gpsMarker=null, gpsCircle=null, watchId=null, gpsCoord=null;
 let searchTimer=null;
 
@@ -532,7 +532,7 @@ async function navigate(){
   loading(true,'A* 路徑計算中...');
   try{
     const d=await call('/route',{method:'POST',body:JSON.stringify({
-      start_lat:sLat,start_lon:sLon,end_lat:eLat,end_lon:eLon,mode
+      start_lat:sLat,start_lon:sLon,end_lat:eLat,end_lon:eLon,mode,alternatives:true
     })});
     latestRoute=d;
     renderRoute(d);
@@ -541,8 +541,34 @@ async function navigate(){
   finally{loading(false);}
 }
 
+function clearAltRoutes(){altRouteLayers.forEach(l=>{map.removeLayer(l)});altRouteLayers=[];}
+
 function renderRoute(d){
+  clearAltRoutes();
   if(routeL){if(routeL._outline)map.removeLayer(routeL._outline);map.removeLayer(routeL);routeL=null;}
+
+  if(d.alternatives?.length){
+    d.alternatives.forEach((alt,i)=>{
+      if(!alt.geojson?.features?.length)return;
+      const outline=L.geoJSON(alt.geojson,{
+        style:()=>({color:'#555',weight:7,opacity:0.3,lineCap:'round',lineJoin:'round',dashArray:'8 6'}),
+        interactive:false
+      }).addTo(map);
+      const line=L.geoJSON(alt.geojson,{
+        style:()=>({color:'#90a4ae',weight:4,opacity:0.6,lineCap:'round',lineJoin:'round',dashArray:'8 6'})
+      }).addTo(map);
+      line.eachLayer(layer=>{
+        layer.bindPopup(`<b>替代路線 ${i+1}</b><br>${alt.total_km.toFixed(1)} km · ${alt.total_min.toFixed(0)} 分`);
+        layer.on('click',()=>{
+          latestRoute=alt;
+          renderRoute(alt);
+          showMsg(`${alt.total_km.toFixed(1)} km · ${alt.total_min.toFixed(0)} 分鐘（替代路線）`,'ok');
+        });
+      });
+      altRouteLayers.push(outline,line);
+    });
+  }
+
   if(d.geojson?.features?.length){
     const routeOutline=L.geoJSON(d.geojson,{
       style:()=>({color:'#1a1a2e',weight:9,opacity:0.6,lineCap:'round',lineJoin:'round'}),
@@ -590,6 +616,7 @@ function renderRoute(d){
 function closeResult(){document.getElementById('resultPanel').classList.remove('show');}
 function clearRoute(){
   if(driving) stopDriving();
+  clearAltRoutes();
   if(routeL){if(routeL._outline)map.removeLayer(routeL._outline);map.removeLayer(routeL);routeL=null;}
   latestRoute=null;
   document.getElementById('resultPanel').classList.remove('show');

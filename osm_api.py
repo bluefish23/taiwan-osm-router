@@ -28,6 +28,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelna
 DB_PATH = os.getenv("DB_PATH", "taiwan_osm.db")
 _router: Optional[OSMRouter] = None
 _syncer = None
+_recompute_status: dict = {"running": False, "last_ok": None, "last_error": None}
 
 @asynccontextmanager
 async def lifespan(app):
@@ -40,20 +41,7 @@ async def lifespan(app):
         _router.ensure_component_ids()
         _router.load_graph(verbose=True)
 
-        interval = int(os.getenv("AUTO_SYNC_INTERVAL", "300"))
-        tdx_id = os.getenv("TDX_CLIENT_ID", "")
-        tdx_secret = os.getenv("TDX_CLIENT_SECRET", "")
-        cwa_key = os.getenv("CWB_API_KEY", "")
-
-        if interval > 0 and (tdx_id or cwa_key):
-            from realtime_sync import RealtimeSyncer, TDXClient, CWAClient
-            tdx = TDXClient(tdx_id, tdx_secret) if tdx_id and tdx_secret else None
-            cwa = CWAClient(cwa_key) if cwa_key else None
-            _syncer = RealtimeSyncer(_router, tdx, cwa, interval=interval)
-            _syncer.start()
-            print(f"[startup] realtime sync started (interval={interval}s)")
-        else:
-            print("[startup] realtime sync disabled (AUTO_SYNC_INTERVAL=0 or no API keys)")
+        print("[startup] TDX/CWA sync disabled (demo mode — manual events only)")
 
         print("[startup] 就緒")
     except FileNotFoundError:
@@ -82,7 +70,11 @@ def require_admin(request: Request):
         return
     auth = request.headers.get("authorization", "")
     token = auth.replace("Bearer ", "") if auth.startswith("Bearer ") else ""
-    if not _ADMIN_TOKEN or not secrets.compare_digest(token, _ADMIN_TOKEN):
+    if not token:
+        token = request.query_params.get("token", "")
+    if not _ADMIN_TOKEN:
+        return
+    if not secrets.compare_digest(token, _ADMIN_TOKEN):
         raise HTTPException(403, "需要管理員權限")
 
 @app.get("/app", response_class=FileResponse)
@@ -167,17 +159,13 @@ def get_r():
 
 class EventReq(BaseModel):
     event_type: str = Field(pattern="^(accident|construction|closure|congestion|manual)$")
-    severity: float = Field(ge=0,le=1)
-    lat: float; lon: float; radius_km: float=0.5
-    highway: Optional[str]=Field(default=None,pattern=r"^(motorway|motorway_link|trunk|trunk_link|primary|primary_link|secondary|secondary_link|tertiary|tertiary_link|unclassified|residential|living_street|service|road)$")
+    lat: float; lon: float
     description: str=""
 
 class WeatherReq(BaseModel):
-    lat: float; lon: float; radius_km: float=50.0
-    rain_level: float=Field(default=0,ge=0,le=1)
-    wind_level: float=Field(default=0,ge=0,le=1)
-    visibility_level: float=Field(default=0,ge=0,le=1)
-    warning_level: float=Field(default=0,ge=0,le=1)
+    lat: float; lon: float
+    radius_km: float=Field(default=30.0,ge=1,le=200)
+    severity: float=Field(default=0.5,ge=0,le=1)
 
 class RecomputeReq(BaseModel):
     mode: str=Field(default="balanced",pattern="^(fastest|balanced|safest)$")
@@ -187,6 +175,7 @@ class RouteReq(BaseModel):
     end_lat: float;   end_lon: float
     mode: str=Field(default="balanced",pattern="^(fastest|balanced|safest)$")
     start_node: Optional[int]=None; end_node: Optional[int]=None
+    alternatives: bool=False
 
 def chk(lat,lon,name=""):
     if not(21.5<=lat<=26.5 and 118<=lon<=122.5):
@@ -241,9 +230,16 @@ def list_events(): return get_r().list_events()
 @app.post("/events")
 def add_event(req:EventReq, _=Depends(require_admin)):
     chk(req.lat,req.lon,"事件")
-    eid=get_r().add_event(req.event_type,req.severity,req.lat,req.lon,
-                           req.radius_km,req.highway,req.description)
-    return {"ok":True,"event_id":eid,"note":"請呼叫 /dynamic/recompute 套用"}
+    eid=get_r().add_event(req.event_type,lat=req.lat,lon=req.lon,
+                           description=req.description)
+    result=get_r().apply_event_incremental(eid)
+    return {"ok":True,"event_id":eid,"incremental":result,
+            "note":"已即時套用（增量預測更新）"}
+
+@app.post("/events/apply/{event_id}")
+def apply_single_event(event_id:str, _=Depends(require_admin)):
+    result=get_r().apply_event_incremental(event_id)
+    return {"ok":True,**result}
 
 @app.delete("/events/{event_id}")
 def del_event(event_id:str, _=Depends(require_admin)):
@@ -266,18 +262,50 @@ def list_weather():
 @app.post("/weather")
 def add_weather(req:WeatherReq, _=Depends(require_admin)):
     chk(req.lat,req.lon,"天氣")
-    wid=get_r().add_weather(req.lat,req.lon,req.radius_km,req.rain_level,
-                              req.wind_level,req.visibility_level,req.warning_level)
-    return {"ok":True,"weather_id":wid,"note":"請呼叫 /dynamic/recompute 套用"}
+    s=req.severity
+    wid=get_r().add_weather(req.lat,req.lon,req.radius_km,
+                              rain=s*0.8,wind=s*0.4,visibility=s*0.7,warning=s*0.6)
+    return {"ok":True,"weather_id":wid,"severity":s,"radius_km":req.radius_km,
+            "note":"請呼叫 /dynamic/recompute 套用"}
+
+def _do_recompute(mode: str):
+    try:
+        get_r().recompute_dynamic_cost(mode=mode)
+        _recompute_status.update(running=False, last_ok=time.time(), last_error=None)
+        _log.info("recompute done (mode=%s)", mode)
+    except Exception as e:
+        _recompute_status.update(running=False, last_error=str(e))
+        _log.exception("recompute failed")
 
 @app.post("/dynamic/recompute")
 def recompute(req:RecomputeReq, _=Depends(require_admin)):
-    try:
-        get_r().recompute_dynamic_cost(mode=req.mode)
-        return {"ok":True,"mode":req.mode,"stats":get_r().stats()}
-    except Exception as e:
-        _log.exception("recompute failed")
-        raise HTTPException(500,"重算動態成本失敗")
+    if _recompute_status["running"]:
+        return {"ok":True,"message":"重算已在執行中，請稍候"}
+    _recompute_status["running"] = True
+    _recompute_status["last_error"] = None
+    threading.Thread(target=_do_recompute, args=(req.mode,), daemon=True).start()
+    return {"ok":True,"mode":req.mode,"message":"重算已開始（背景執行）"}
+
+@app.get("/dynamic/recompute/status")
+def recompute_status():
+    return _recompute_status
+
+@app.post("/benchmark/recompute")
+def benchmark_recompute(_=Depends(require_admin)):
+    import time as _time
+    temp_eid=get_r().add_event("congestion",1.0,25.05,121.52,0.5,description="benchmark_temp")
+    t0=_time.perf_counter()
+    inc_result=get_r().apply_event_incremental(temp_eid)
+    t_inc=_time.perf_counter()-t0
+    get_r().remove_event(temp_eid)
+    t0=_time.perf_counter()
+    get_r().recompute_dynamic_cost(mode="balanced")
+    t_full=_time.perf_counter()-t0
+    return {"incremental_ms":round(t_inc*1000,2),
+            "full_recompute_ms":round(t_full*1000,2),
+            "speedup":round(t_full/max(t_inc,0.0001),1),
+            "incremental_edges":inc_result.get("applied",0),
+            "prediction_factors":inc_result.get("factors",{})}
 
 @app.post("/route")
 def route(req:RouteReq):
@@ -292,19 +320,30 @@ def route(req:RouteReq):
             if req.start_node else r.nearest_node(req.start_lat,req.start_lon))
         en=({"node_id":req.end_node,"lat":req.end_lat,"lon":req.end_lon}
             if req.end_node else r.nearest_node(req.end_lat,req.end_lon))
-        result=r.route(sn["node_id"],en["node_id"],mode=req.mode)
-        geojson=OSMRouter.to_geojson(result.edges)
-        matched=[]
-        for ev in r.list_events():
-            elat,elon,erad=float(ev.get("lat",0)),float(ev.get("lon",0)),float(ev.get("radius_km",0.5))
-            for e in result.edges:
-                if haversine_km(elat,elon,e.get("lat_a",0),e.get("lon_a",0))<=erad*1.5:
-                    matched.append(ev); break
-        return {"ok":True,"mode":req.mode,"start_node":sn,"end_node":en,
-                "total_km":round(result.total_km,4),"total_min":round(result.total_min,2),
-                "total_cost":round(result.total_cost,4),"num_edges":len(result.edges),
-                "edges":result.edges,"geojson":geojson,"matched_events":matched,
-                "analysis_text":OSMRouter.analysis_text(result,sn,en,matched)}
+
+        def _build_response(result):
+            geojson=OSMRouter.to_geojson(result.edges)
+            matched=[]
+            for ev in r.list_events():
+                elat,elon,erad=float(ev.get("lat",0)),float(ev.get("lon",0)),float(ev.get("radius_km",0.5))
+                for e in result.edges:
+                    if haversine_km(elat,elon,e.get("lat_a",0),e.get("lon_a",0))<=erad*1.5:
+                        matched.append(ev); break
+            return {"ok":True,"mode":req.mode,"start_node":sn,"end_node":en,
+                    "total_km":round(result.total_km,4),"total_min":round(result.total_min,2),
+                    "total_cost":round(result.total_cost,4),"num_edges":len(result.edges),
+                    "edges":result.edges,"geojson":geojson,"matched_events":matched,
+                    "analysis_text":OSMRouter.analysis_text(result,sn,en,matched)}
+
+        if req.alternatives:
+            results=r.route_alternatives(sn["node_id"],en["node_id"],mode=req.mode,n=3)
+            if not results: raise ValueError("找不到路徑")
+            primary=_build_response(results[0])
+            primary["alternatives"]=[_build_response(alt) for alt in results[1:]]
+            return primary
+        else:
+            result=r.route(sn["node_id"],en["node_id"],mode=req.mode)
+            return _build_response(result)
     except HTTPException: raise
     except ValueError as e: raise HTTPException(400,str(e))
     except Exception as e:

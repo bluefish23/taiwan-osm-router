@@ -205,6 +205,15 @@ class RealtimeSyncer:
         with self._status_lock:
             self._status["running"] = False
 
+    def pause(self):
+        self._sync_lock.acquire()
+
+    def resume(self):
+        try:
+            self._sync_lock.release()
+        except RuntimeError:
+            pass
+
     def status(self) -> dict:
         with self._status_lock:
             s = dict(self._status)
@@ -513,8 +522,8 @@ class RealtimeSyncer:
                     except (ValueError, TypeError):
                         pass
 
-            rain_level = min(1.0, rain_1hr / 80.0)
-            wind_level = min(1.0, max(0, (wind_speed - 5) / 25.0))
+            rain_level = min(1.0, (rain_1hr / 80.0) ** 0.5)
+            wind_level = min(1.0, max(0, (wind_speed - 8) / 22.0))
             vis_level = 0.0
             vis_desc = wx.get("Visibility", {})
             if isinstance(vis_desc, dict):

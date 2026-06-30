@@ -183,40 +183,21 @@ button{border:none;border-radius:6px;padding:8px 12px;font-family:var(--cond);
 
     <div class="card">
       <div class="card-title">新增事件</div>
-      <div class="row2">
-        <div>
-          <label>類型</label>
-          <select id="evType">
-            <option value="accident">車禍 accident</option>
-            <option value="construction">施工 construction</option>
-            <option value="closure">封閉 closure</option>
-            <option value="congestion">壅塞 congestion</option>
-            <option value="manual">手動 manual</option>
-          </select>
-        </div>
-        <div>
-          <label>嚴重度 (0-1)</label>
-          <input type="number" id="evSev" value="0.7" min="0" max="1" step="0.1"/>
-        </div>
-      </div>
+      <label>類型</label>
+      <select id="evType">
+        <option value="accident">車禍 accident</option>
+        <option value="construction">施工 construction</option>
+        <option value="closure">封閉 closure</option>
+        <option value="congestion">壅塞 congestion</option>
+        <option value="manual">手動 manual</option>
+      </select>
       <div class="row2">
         <div><label>緯度</label><input type="number" id="evLat" value="25.0418" step="0.0001" oninput="validateCoord(this,'lat')"/></div>
         <div><label>經度</label><input type="number" id="evLon" value="121.5365" step="0.0001" oninput="validateCoord(this,'lon')"/></div>
       </div>
-      <label>影響半徑 (km)</label>
-      <input type="number" id="evRad" value="0.5" min="0.1" max="50" step="0.1"/>
-      <label>限道路類型（選填）</label>
-      <select id="evHW">
-        <option value="">全部道路</option>
-        <option value="motorway">motorway 高速</option>
-        <option value="trunk">trunk 快速</option>
-        <option value="primary">primary 主要</option>
-        <option value="secondary">secondary 次要</option>
-        <option value="tertiary">tertiary 三級</option>
-        <option value="residential">residential 住宅</option>
-      </select>
       <label>描述</label>
       <textarea id="evDesc">前方事故，請注意行車安全</textarea>
+      <div style="font-size:11px;color:var(--muted);margin-top:4px">嚴重度、影響範圍由預測模型自動計算</div>
       <div class="g2">
         <button class="pr" onclick="addEvent()">新增事件</button>
         <button class="dn" onclick="clearEvents()">清空所有</button>
@@ -230,21 +211,18 @@ button{border:none;border-radius:6px;padding:8px 12px;font-family:var(--cond);
         <div><label>緯度</label><input type="number" id="wxLat" value="25.0418" step="0.0001"/></div>
         <div><label>經度</label><input type="number" id="wxLon" value="121.5365" step="0.0001"/></div>
       </div>
-      <label>影響半徑 (km)</label>
-      <input type="number" id="wxRad" value="50" min="1" max="200"/>
-      <div class="row4" style="margin-top:8px">
-        <div><label>雨</label><input type="number" id="wxRain" value="0.6" min="0" max="1" step="0.1"/></div>
-        <div><label>風</label><input type="number" id="wxWind" value="0.3" min="0" max="1" step="0.1"/></div>
-        <div><label>霧</label><input type="number" id="wxVis" value="0.2" min="0" max="1" step="0.1"/></div>
-        <div><label>特報</label><input type="number" id="wxWarn" value="0" min="0" max="1" step="0.1"/></div>
+      <div class="row2">
+        <div><label>影響半徑 (km)</label><input type="number" id="wxRad" value="30" min="1" max="200" step="1"/></div>
+        <div><label>嚴重度 (0-1)</label><input type="number" id="wxSev" value="0.5" min="0" max="1" step="0.1"/></div>
       </div>
+      <div style="font-size:11px;color:var(--muted);margin-top:4px">嚴重度會自動分配到雨量/風速/能見度/特報</div>
       <button class="am" style="margin-top:8px" onclick="addWeather()">套用天氣</button>
       <div id="wxMsg" class="msg"></div>
     </div>
 
     <div class="card">
       <div class="card-title">套用動態因子</div>
-      <p style="font-size:11px;color:var(--muted);margin-bottom:8px">新增事件/天氣後需執行（約 20 秒）</p>
+      <p style="font-size:11px;color:var(--muted);margin-bottom:8px">事件已即時生效，僅天氣需重算</p>
       <div class="row2" style="margin-top:0">
         <select id="reMode" style="margin:0">
           <option value="fastest">fastest</option>
@@ -301,6 +279,10 @@ map.on('click',e=>{
 });
 
 const api=()=>document.getElementById('apiBase').value.trim().replace(/\/$/,'');
+(function(){
+  const urlTk=new URLSearchParams(location.search).get('token');
+  if(urlTk){const el=document.getElementById('adminToken');if(el)el.value=urlTk;}
+})();
 function authHeaders(){
   const h={'Content-Type':'application/json'};
   const tk=(document.getElementById('adminToken')?.value||'').trim();
@@ -351,17 +333,15 @@ function validateCoord(el,type){
 async function addEvent(){
   const lat=+document.getElementById('evLat').value,lon=+document.getElementById('evLon').value;
   if(lat<21.5||lat>26.5||lon<118||lon>122.5){msg('evMsg','座標超出台灣範圍','err');return;}
-  const payload={event_type:document.getElementById('evType').value,
-    severity:+document.getElementById('evSev').value,lat,lon,
-    radius_km:+document.getElementById('evRad').value,
+  const payload={event_type:document.getElementById('evType').value,lat,lon,
     description:document.getElementById('evDesc').value};
-  const hw=document.getElementById('evHW').value;
-  if(hw)payload.highway=hw;
   try{
     const d=await call('/events',{method:'POST',body:JSON.stringify(payload)});
-    evRecords.push({kind:'⚠ '+payload.event_type,text:`${lat.toFixed(3)},${lon.toFixed(3)} r=${payload.radius_km}km`});
+    const inc=d.incremental||{};
+    const r=inc.predicted_radius_km||'?', s=inc.predicted_severity||'?';
+    evRecords.push({kind:'⚠ '+payload.event_type,text:`${lat.toFixed(3)},${lon.toFixed(3)} 預測r=${r}km s=${s}`});
     renderEvLog();
-    msg('evMsg',`已新增(${d.event_id})，記得重算`,'ok');
+    msg('evMsg',`已新增 — 預測半徑 ${r}km、嚴重度 ${s}、影響 ${inc.applied||0} 條路段`,'ok');
     document.getElementById('rawPrev').value=JSON.stringify(d,null,2);
   }catch(e){msg('evMsg',e.message,'err');}
 }
@@ -371,28 +351,36 @@ async function clearEvents(){
   catch(e){msg('evMsg',e.message,'err');}
 }
 async function addWeather(){
+  const sev=+document.getElementById('wxSev').value,rad=+document.getElementById('wxRad').value;
   const payload={lat:+document.getElementById('wxLat').value,lon:+document.getElementById('wxLon').value,
-    radius_km:+document.getElementById('wxRad').value,
-    rain_level:+document.getElementById('wxRain').value,wind_level:+document.getElementById('wxWind').value,
-    visibility_level:+document.getElementById('wxVis').value,warning_level:+document.getElementById('wxWarn').value};
+    radius_km:rad,severity:sev};
   try{
     const d=await call('/weather',{method:'POST',body:JSON.stringify(payload)});
-    evRecords.push({kind:'🌧 天氣',text:`r=${payload.radius_km}km 雨${payload.rain_level}`});
+    evRecords.push({kind:'🌧 天氣',text:`r=${rad}km 嚴重度=${sev}`});
     renderEvLog();
-    msg('wxMsg','天氣已新增，記得重算','ok');
+    msg('wxMsg',`天氣已新增（嚴重度 ${sev}，半徑 ${rad}km），記得重算`,'ok');
     document.getElementById('rawPrev').value=JSON.stringify(d,null,2);
   }catch(e){msg('wxMsg',e.message,'err');}
 }
 async function recompute(){
   const mode=document.getElementById('reMode').value;
-  loading(true,'重算 dynamic_cost...');msg('dynMsg','重算中...','info');
+  loading(true,'重算 dynamic_cost...');msg('dynMsg','重算中（背景執行）...','info');
   try{
-    const d=await call('/dynamic/recompute',{method:'POST',body:JSON.stringify({mode})});
-    msg('dynMsg',`完成(${mode})`,`ok`);
-    document.getElementById('rawPrev').value=JSON.stringify(d,null,2);
-    if(d.stats)updateStats(d.stats);
-  }catch(e){msg('dynMsg',e.message,'err');}
-  finally{loading(false);}
+    await call('/dynamic/recompute',{method:'POST',body:JSON.stringify({mode})});
+    pollRecompute(mode);
+  }catch(e){msg('dynMsg',e.message,'err');loading(false);}
+}
+async function pollRecompute(mode){
+  const poll=async()=>{
+    try{
+      const s=await call('/dynamic/recompute/status');
+      if(s.running){msg('dynMsg','重算中...','info');setTimeout(poll,3000);return;}
+      if(s.last_error){msg('dynMsg','重算失敗: '+s.last_error,'err');loading(false);return;}
+      msg('dynMsg',`完成(${mode})`,'ok');loading(false);
+      try{updateStats(await call('/stats'));}catch(e){}
+    }catch(e){msg('dynMsg','查詢狀態失敗: '+e.message,'err');loading(false);}
+  };
+  setTimeout(poll,3000);
 }
 function renderEvLog(){
   const el=document.getElementById('evlog');

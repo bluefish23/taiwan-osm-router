@@ -56,6 +56,23 @@ VALID_HIGHWAYS = {"motorway","motorway_link","trunk","trunk_link","primary","pri
     "secondary","secondary_link","tertiary","tertiary_link","unclassified","residential",
     "living_street","service","road"}
 MIN_SPEED = 3.0
+
+ROAD_CRITICALITY = {
+    "motorway":1.0,"motorway_link":0.9,"trunk":0.85,"trunk_link":0.7,
+    "primary":0.65,"primary_link":0.55,"secondary":0.45,"secondary_link":0.35,
+    "tertiary":0.30,"tertiary_link":0.25,"residential":0.15,"service":0.10,
+    "unclassified":0.20,"living_street":0.10,"road":0.20,
+}
+BASE_RADIUS = {
+    "accident":0.8,"construction":0.5,"congestion":1.0,"closure":1.5,
+    "landslide_warning":1.0,"landslide_high":1.5,"landslide_closure":2.0,"manual":0.5,
+}
+RISK_ADDITION = {"accident":8,"construction":5,"congestion":3,"manual":2,
+                 "landslide_warning":6,"landslide_high":10}
+BASE_SEVERITY = {
+    "accident":0.80,"construction":0.50,"closure":1.00,"congestion":0.60,
+    "manual":0.50,"landslide_warning":0.60,"landslide_high":0.85,"landslide_closure":1.00,
+}
 MAX_SPEED = 120.0
 SHORT_DIST_KM = 15.0
 _CTR = itertools.count()
@@ -364,11 +381,28 @@ class OSMRouter:
     def route(self, start_node, end_node, mode="balanced") -> RouteResult:
         self._graph_lock.acquire()
         try:
-            return self._route_inner(start_node, end_node, mode)
+            return self._route_inner(start_node, end_node, mode, None)
         finally:
             self._graph_lock.release()
 
-    def _route_inner(self, start_node, end_node, mode="balanced") -> RouteResult:
+    def route_alternatives(self, start_node, end_node, mode="balanced", n=2) -> list:
+        self._graph_lock.acquire()
+        try:
+            results = []
+            penalty_edges: set = set()
+            for i in range(n):
+                try:
+                    r = self._route_inner(start_node, end_node, mode, penalty_edges)
+                    results.append(r)
+                    for e in r.edges:
+                        penalty_edges.add(e["edge_id"])
+                except ValueError:
+                    break
+            return results
+        finally:
+            self._graph_lock.release()
+
+    def _route_inner(self, start_node, end_node, mode="balanced", penalty_edges: set = None) -> RouteResult:
         if not self._graph_loaded:
             raise RuntimeError("請先呼叫 load_graph()")
         graph = self._graph
@@ -469,6 +503,9 @@ class OSMRouter:
                 if nxt in sig_nodes and e.hw not in ("motorway","motorway_link","trunk","trunk_link"):
                     ec2 += SIGNAL_DELAY_MIN
 
+                if penalty_edges and e.eid in penalty_edges:
+                    ec2 *= 1.6
+
                 ng = g + ec2
                 if ng >= best.get(nxt, float("inf")):
                     continue
@@ -481,11 +518,13 @@ class OSMRouter:
                          "請確認座標在台灣道路範圍內。")
 
     # CRUD
-    def add_event(self,event_type,severity,lat,lon,radius_km=0.5,highway=None,description=""):
+    def add_event(self,event_type,severity=None,lat=0,lon=0,radius_km=None,highway=None,description=""):
+        if severity is None:
+            severity = BASE_SEVERITY.get(event_type, 0.50)
         eid=f"evt_{uuid.uuid4().hex[:12]}"
         with _conn(self.db_path) as conn:
             conn.execute("INSERT INTO dynamic_events VALUES(?,?,?,?,?,?,?,?,1,?,?)",
-                (eid,event_type,float(severity),highway,float(lat),float(lon),float(radius_km),description,utc_now(),"manual"))
+                (eid,event_type,float(severity),highway,float(lat),float(lon),float(radius_km or 0),description,utc_now(),"manual"))
             conn.commit()
         return eid
 
@@ -583,6 +622,103 @@ class OSMRouter:
                 new_cost = (e.dist / spd) * 60
                 self._graph[fn][idx] = e._replace(cost=new_cost, risk=float(r["risk"] or 0))
             self._modified_edges.add(eid)
+
+    def _predict_impact(self, lat, lon, event_type, severity, highway=None):
+        omega = ROAD_CRITICALITY.get(highway, 0.30) if highway else 0.30
+        dlat = 1.0 / 110.574
+        dlon = 1.0 / (111.320 * math.cos(math.radians(lat)))
+        with _conn(self.db_path) as conn:
+            n_edges = conn.execute(
+                "SELECT COUNT(*) FROM osm_edges "
+                "WHERE lat_a BETWEEN ? AND ? AND lon_a BETWEEN ? AND ?",
+                (lat - dlat, lat + dlat, lon - dlon, lon + dlon)
+            ).fetchone()[0]
+        kappa = min(1.0, n_edges / 200.0)
+        if not highway:
+            dlat2 = 0.2 / 110.574
+            dlon2 = 0.2 / (111.320 * math.cos(math.radians(lat)))
+            with _conn(self.db_path) as conn:
+                row = conn.execute(
+                    "SELECT highway FROM osm_edges "
+                    "WHERE lat_a BETWEEN ? AND ? AND lon_a BETWEEN ? AND ? "
+                    "ORDER BY CASE highway WHEN 'motorway' THEN 1 WHEN 'trunk' THEN 2 "
+                    "WHEN 'primary' THEN 3 WHEN 'secondary' THEN 4 ELSE 5 END LIMIT 1",
+                    (lat - dlat2, lat + dlat2, lon - dlon2, lon + dlon2)
+                ).fetchone()
+            if row:
+                omega = ROAD_CRITICALITY.get(row[0], 0.30)
+        try:
+            nd = self.nearest_node(lat, lon)
+            node_deg = len(self._graph.get(nd["node_id"], []))
+        except Exception:
+            node_deg = 4
+        delta = min(1.0, node_deg / 8.0)
+        r_base = BASE_RADIUS.get(event_type, 0.5)
+        predicted_r = r_base * (1 + omega) * (1 - 0.5 * kappa)
+        predicted_s = severity * (1 + omega * (1 - kappa) * (1 - delta))
+        return predicted_r, predicted_s, {
+            "omega": round(omega, 3), "kappa": round(kappa, 3),
+            "delta": round(delta, 3), "n_edges_1km": n_edges,
+            "node_degree": node_deg,
+        }
+
+    def apply_event_incremental(self, event_id):
+        with _conn(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            ev = conn.execute(
+                "SELECT * FROM dynamic_events WHERE event_id=? AND is_active=1",
+                (event_id,)
+            ).fetchone()
+            if not ev:
+                return {"applied": 0}
+            elat, elon = float(ev["lat"] or 0), float(ev["lon"] or 0)
+            sev = float(ev["severity"] or 1)
+            etype = ev["event_type"]
+            hw_filter = ev["highway"] if ev["highway"] and ev["highway"] in VALID_HIGHWAYS else None
+            pred_r, pred_s, factors = self._predict_impact(elat, elon, etype, sev, hw_filter)
+            mult = INCIDENT_MULT.get(etype, 1.25)
+            dlat = pred_r / 110.574
+            dlon = pred_r / (111.320 * math.cos(math.radians(elat)))
+            bbox = (elat - dlat, elat + dlat, elon - dlon, elon + dlon)
+            sql = ("SELECT edge_id FROM osm_edges "
+                   "WHERE lat_a BETWEEN ? AND ? AND lon_a BETWEEN ? AND ?")
+            params = list(bbox)
+            if hw_filter:
+                sql += " AND highway=?"
+                params.append(hw_filter)
+            edges = conn.execute(sql, params).fetchall()
+            conn.execute("UPDATE dynamic_events SET severity=?, radius_km=? WHERE event_id=?",
+                         (round(pred_s, 4), round(pred_r, 4), event_id))
+            conn.commit()
+        applied = 0
+        is_closure = etype in ("closure", "landslide_closure")
+        with self._graph_lock:
+            for r in edges:
+                eid = r["edge_id"]
+                loc = self._edge_index.get(eid)
+                if loc is None:
+                    continue
+                fn, idx = loc
+                e = self._graph[fn][idx]
+                if is_closure:
+                    self._graph[fn][idx] = e._replace(cost=1e8, risk=100.0)
+                else:
+                    ra = RISK_ADDITION.get(etype, 2) * pred_s
+                    new_mult = pred_s * mult
+                    orig_cost = (e.dist / max(e.spd, MIN_SPEED)) * 60
+                    current_mult = e.cost / orig_cost if orig_cost > 0 else 1.0
+                    final_mult = max(current_mult, new_mult)
+                    new_spd = max(e.spd / max(final_mult, 0.01), MIN_SPEED)
+                    self._graph[fn][idx] = e._replace(
+                        cost=(e.dist / new_spd) * 60, risk=e.risk + ra)
+                self._modified_edges.add(eid)
+                applied += 1
+        return {
+            "applied": applied, "event_id": event_id, "event_type": etype,
+            "predicted_radius_km": round(pred_r, 3),
+            "predicted_severity": round(pred_s, 3),
+            "factors": factors,
+        }
 
     def stats(self):
         s={"db_name":Path(self.db_path).name,"graph_loaded":self._graph_loaded,

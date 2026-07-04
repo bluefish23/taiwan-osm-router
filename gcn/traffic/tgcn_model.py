@@ -30,6 +30,8 @@ class TGCN(nn.Module):
         dims = [num_features] + [hidden] * gcn_layers
         self.gcn = nn.ModuleList(GCNLayer(dims[i], dims[i + 1])
                                  for i in range(gcn_layers))
+        # 殘差路徑：保留節點自身特徵，避免空間聚合模糊各路段的時間模式
+        self.skip = nn.Linear(num_features, hidden)
         self.gru = nn.GRU(hidden, hidden, batch_first=True)
         self.head = nn.Linear(hidden, num_horizons)
 
@@ -40,6 +42,7 @@ class TGCN(nn.Module):
         for layer in self.gcn:
             h = torch.stack([layer(a_hat, hi) for hi in h])  # (B·T, N, hidden)
             h = torch.relu(h)
+        h = h + self.skip(x.reshape(b * t, n, f))             # 殘差
         h = h.reshape(b, t, n, -1).permute(0, 2, 1, 3)        # (B, N, T, hidden)
         h = h.reshape(b * n, t, -1)
         _, h_last = self.gru(h)                               # (1, B·N, hidden)
@@ -60,6 +63,7 @@ class TGCNFast(TGCN):
             out = torch.sparse.mm(a_hat, s2)
             h = out.reshape(n, b * t, -1).permute(1, 0, 2) + layer.bias
             h = torch.relu(h)
+        h = h + self.skip(x.reshape(b * t, n, f))             # 殘差
         h = h.reshape(b, t, n, -1).permute(0, 2, 1, 3).reshape(b * n, t, -1)
         _, h_last = self.gru(h)
         out = self.head(h_last.squeeze(0))

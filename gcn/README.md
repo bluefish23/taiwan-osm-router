@@ -74,7 +74,19 @@ python gcn/traffic/train_traffic.py --model gru    # ablation：無 GCN
 - 任務：過去 60 分鐘 → 預測未來 5/15/30 分鐘車速；MAE/RMSE
 - Baseline：naive（上一時刻）、HA（一週時間槽歷史平均）、GRU（無空間資訊）
 - 異常偵測：預測殘差 z-score > 3 標記（precision/recall 待以 TDX 事件標記對齊）
-- 結果：`results/traffic_*.json`、示意圖 `results/traffic_pred_*.png`
+- 測試集結果（MAE，km/h）：
+
+| 模型 | @5min | @15min | @30min |
+|---|---|---|---|
+| **T-GCN（GCN+GRU）** | **1.88** | **2.57** | **3.23** |
+| GRU（無 GCN，ablation） | 2.00 | 2.64 | 3.33 |
+| naive（上一時刻） | 2.40 | 3.11 | 3.87 |
+| 歷史平均 HA | 4.51 | 4.51 | 4.51 |
+
+- 發現：GCN 空間聚合需搭配**殘差連接**（保留節點自身特徵路徑）才有正貢獻；
+  無殘差時每個時間步的鄰居混合會模糊路段自身的時間模式，反而劣於純 GRU
+  （report 討論點，詳見 `tgcn_model.py`）
+- 完整數據：`results/traffic_*.json`、示意圖 `results/traffic_pred_*.png`
 
 ## 與計畫書的差異／備註
 

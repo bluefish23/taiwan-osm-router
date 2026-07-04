@@ -1,12 +1,12 @@
 {
-  "model": "tgcn",
+  "model": "gru",
   "config": {
     "epochs": 50,
     "lr": 0.001,
     "hidden": 64,
     "batch": 32,
     "patience": 8,
-    "model": "tgcn",
+    "model": "gru",
     "in_steps": 12,
     "horizons": [
       1,
@@ -19,14 +19,14 @@
     "nodes": 148,
     "edges": 146
   },
-  "train_seconds": 262.8,
+  "train_seconds": 181.0,
   "test_metrics": {
-    "MAE@5min": 1.88,
-    "RMSE@5min": 2.976,
-    "MAE@15min": 2.565,
-    "RMSE@15min": 4.88,
-    "MAE@30min": 3.228,
-    "RMSE@30min": 6.726
+    "MAE@5min": 2.0,
+    "RMSE@5min": 3.129,
+    "MAE@15min": 2.638,
+    "RMSE@15min": 5.085,
+    "MAE@30min": 3.334,
+    "RMSE@30min": 6.998
   },
   "baseline_naive": {
     "MAE@5min": 2.401,
@@ -45,8 +45,8 @@
     "RMSE@30min": 10.229
   },
   "anomaly_detection": {
-    "count": 2356,
-    "rate": 0.01321,
+    "count": 2388,
+    "rate": 0.01339,
     "note": "殘差 z>3 之 (時間窗, 路段)；precision/recall 需事件標記（未來以 TDX 事故資料對齊）"
   }
 }

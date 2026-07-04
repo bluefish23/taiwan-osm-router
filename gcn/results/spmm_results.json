@@ -1,0 +1,95 @@
+{
+  "order_experiment": {
+    "n": 20000,
+    "f": 500,
+    "h": 64,
+    "time_(AX)W": 0.0517,
+    "time_A(XW)": 0.0224,
+    "speedup": 2.3,
+    "flops_(AX)W": 1282000000,
+    "flops_A(XW)": 38400000
+  },
+  "sparsity_sweep": [
+    {
+      "n": 4000,
+      "density": 0.5,
+      "time_dense": 0.02171,
+      "time_sparse_pruned": 0.27363,
+      "speedup": 0.08
+    },
+    {
+      "n": 4000,
+      "density": 0.2,
+      "time_dense": 0.02133,
+      "time_sparse_pruned": 0.11613,
+      "speedup": 0.18
+    },
+    {
+      "n": 4000,
+      "density": 0.1,
+      "time_dense": 0.02277,
+      "time_sparse_pruned": 0.06172,
+      "speedup": 0.37
+    },
+    {
+      "n": 4000,
+      "density": 0.05,
+      "time_dense": 0.02189,
+      "time_sparse_pruned": 0.03777,
+      "speedup": 0.58
+    },
+    {
+      "n": 4000,
+      "density": 0.01,
+      "time_dense": 0.02276,
+      "time_sparse_pruned": 0.00725,
+      "speedup": 3.14
+    },
+    {
+      "n": 4000,
+      "density": 0.005,
+      "time_dense": 0.0223,
+      "time_sparse_pruned": 0.00359,
+      "speedup": 6.21
+    },
+    {
+      "n": 4000,
+      "density": 0.001,
+      "time_dense": 0.02091,
+      "time_sparse_pruned": 0.00095,
+      "speedup": 22.04
+    }
+  ],
+  "size_sweep": [
+    {
+      "density": 0.01,
+      "n": 1000,
+      "time_dense": 0.00185,
+      "time_sparse_pruned": 0.00041
+    },
+    {
+      "density": 0.01,
+      "n": 2000,
+      "time_dense": 0.00639,
+      "time_sparse_pruned": 0.00165
+    },
+    {
+      "density": 0.01,
+      "n": 4000,
+      "time_dense": 0.02404,
+      "time_sparse_pruned": 0.00703
+    },
+    {
+      "density": 0.01,
+      "n": 8000,
+      "time_dense": 0.05362,
+      "time_sparse_pruned": 0.03499
+    },
+    {
+      "density": 0.01,
+      "n": 16000,
+      "time_dense": 0.39279,
+      "time_sparse_pruned": 0.12926
+    }
+  ]
+}

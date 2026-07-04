@@ -8,3 +8,7 @@ __pycache__/
 *.pbf
 *.pkl
 vstips.txt
+
+# GCN 專題
+.venv/
+gcn/data/

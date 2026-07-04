@@ -1,0 +1,21 @@
+{
+  "dataset": "pubmed",
+  "config": {
+    "dataset": "pubmed",
+    "hidden": 64,
+    "layers": 2,
+    "lr": 0.001,
+    "epochs": 50,
+    "patience": 10,
+    "dropout": 0.5,
+    "weight_decay": 0.0005,
+    "cpu": false,
+    "device": "cuda"
+  },
+  "test_accuracy": 0.714,
+  "best_val_accuracy": 0.738,
+  "best_epoch": 36,
+  "total_train_seconds": 0.8,
+  "mean_epoch_seconds": 0.0145,
+  "spmm_seconds_total": 0.1515
+}

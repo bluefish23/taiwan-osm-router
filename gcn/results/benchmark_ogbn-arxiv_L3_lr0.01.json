@@ -1,0 +1,21 @@
+{
+  "dataset": "ogbn-arxiv",
+  "config": {
+    "dataset": "ogbn-arxiv",
+    "hidden": 64,
+    "layers": 3,
+    "lr": 0.01,
+    "epochs": 300,
+    "patience": 50,
+    "dropout": 0.3,
+    "weight_decay": 0.0005,
+    "cpu": false,
+    "device": "cuda"
+  },
+  "test_accuracy": 0.6744,
+  "best_val_accuracy": 0.6845,
+  "best_epoch": 298,
+  "total_train_seconds": 35.52,
+  "mean_epoch_seconds": 0.0797,
+  "spmm_seconds_total": 19.2353
+}

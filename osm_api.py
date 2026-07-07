@@ -307,6 +307,59 @@ def benchmark_recompute(_=Depends(require_admin)):
             "incremental_edges":inc_result.get("applied",0),
             "prediction_factors":inc_result.get("factors",{})}
 
+# ------------------------------------------------------------------
+# GCN 預測整合（Phase 5，僅新增——不影響既有事件/天氣/路由機制）
+# 預測事件以 source='prediction' 存於 dynamic_events，
+# 與 manual / realtime 事件互不干擾；套用成本沿用既有 /dynamic/recompute。
+# ------------------------------------------------------------------
+_predict_status: dict = {"running": False, "last_ok": None, "last_error": None,
+                          "last_result": None}
+
+def _gcn_path():
+    import sys
+    p = str(Path(__file__).parent / "gcn")
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+def _do_predict(at_index: Optional[int]):
+    try:
+        _gcn_path()
+        from traffic.predict_service import run_prediction
+        result = run_prediction(get_r().db_path, at_index)
+        _predict_status.update(running=False, last_ok=time.time(),
+                               last_error=None, last_result=result)
+        _log.info("prediction done: %s events", result.get("events_created"))
+    except Exception as e:
+        _predict_status.update(running=False, last_error=str(e))
+        _log.exception("prediction failed")
+
+@app.post("/predict/run")
+def predict_run(at_index: Optional[int] = None, _=Depends(require_admin)):
+    """跑一輪 T-GCN 車速預測，把預測壅塞寫入事件表（背景執行）。"""
+    if _predict_status["running"]:
+        return {"ok": True, "message": "預測已在執行中，請稍候"}
+    _predict_status["running"] = True
+    _predict_status["last_error"] = None
+    threading.Thread(target=_do_predict, args=(at_index,), daemon=True).start()
+    return {"ok": True, "message": "預測已開始（背景執行），完成後呼叫 /dynamic/recompute 套用"}
+
+@app.get("/predict/status")
+def predict_status():
+    return _predict_status
+
+@app.get("/predict/congestion")
+def predict_congestion():
+    """列出目前的預測壅塞事件（source='prediction'）。"""
+    return [ev for ev in get_r().list_events() if ev.get("source") == "prediction"]
+
+@app.delete("/predict/events")
+def clear_prediction_events(_=Depends(require_admin)):
+    _gcn_path()
+    from traffic.predict_service import clear_predictions
+    n = clear_predictions(get_r().db_path)
+    return {"ok": True, "deleted": n,
+            "note": "如事件先前已套用成本，請呼叫 /dynamic/recompute 重置"}
+
 @app.post("/route")
 def route(req:RouteReq):
     chk(req.start_lat,req.start_lon,"起點"); chk(req.end_lat,req.end_lon,"終點")

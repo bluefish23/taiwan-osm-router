@@ -21,9 +21,11 @@ import scipy.sparse as sp
 import torch
 import torch.nn.functional as F
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+_GCN_DIR = str(Path(__file__).resolve().parent.parent)
+if _GCN_DIR not in sys.path:
+    sys.path.insert(0, _GCN_DIR)
 from gcn_layer import normalize_adjacency, sparse_to_torch  # noqa: E402
-from traffic.tgcn_model import NodeGRU, TGCNFast            # noqa: E402
+from traffic.tgcn_model import NodeGRU, TGCN                # noqa: E402
 
 DATA = Path(__file__).resolve().parent.parent / "data" / "m05a" / "m05a_matrix.npz"
 RESULTS_DIR = Path(__file__).resolve().parent.parent / "results"
@@ -105,10 +107,12 @@ def main() -> None:
     idx_test = idx_all[idx_all >= t_val_end]
     print(f"windows: train {len(idx_train)} / val {len(idx_val)} / test {len(idx_test)}")
 
+    # 三個切分的視窗都只建一次（訓練迴圈內僅做索引切片）
+    x_train, y_train = make_windows(feats, idx_train)
     x_val, y_val = make_windows(feats, idx_val)
     x_test, y_test = make_windows(feats, idx_test)
 
-    model_cls = TGCNFast if args.model == "tgcn" else NodeGRU
+    model_cls = TGCN if args.model == "tgcn" else NodeGRU
     model = model_cls(num_features=2, hidden=args.hidden,
                       num_horizons=len(HORIZONS)).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
@@ -126,12 +130,12 @@ def main() -> None:
     t0 = time.perf_counter()
     for epoch in range(1, args.epochs + 1):
         model.train()
-        perm = np.random.default_rng(epoch).permutation(idx_train)
+        perm = np.random.default_rng(epoch).permutation(len(x_train))
         losses = []
         for i in range(0, len(perm), args.batch):
-            xb, yb = make_windows(feats, perm[i:i + args.batch])
-            xb = torch.from_numpy(xb).to(device)
-            yb = torch.from_numpy(yb).to(device)
+            sel = perm[i:i + args.batch]
+            xb = torch.from_numpy(x_train[sel]).to(device)
+            yb = torch.from_numpy(y_train[sel]).to(device)
             opt.zero_grad()
             loss = F.l1_loss(model(a_hat, xb), yb)
             loss.backward()
@@ -177,6 +181,21 @@ def main() -> None:
         "rate": round(float(len(anomalies)) / z.size, 5),
         "note": "殘差 z>3 之 (時間窗, 路段)；precision/recall 需事件標記（未來以 TDX 事故資料對齊）",
     }
+
+    # 存 checkpoint 供線上推論（predict_service.py）使用
+    ckpt_path = RESULTS_DIR / f"traffic_{args.model}.ckpt"
+    RESULTS_DIR.mkdir(exist_ok=True)
+    torch.save({
+        "model": args.model,
+        "state_dict": best_state,
+        "hidden": args.hidden,
+        "in_steps": IN_STEPS,
+        "horizons": HORIZONS,
+        "sections": sections.tolist(),
+        "norm": {"sp_mean": float(sp_mean), "sp_std": float(sp_std),
+                 "vo_mean": float(vo_mean), "vo_std": float(vo_std)},
+    }, ckpt_path)
+    print(f"checkpoint -> {ckpt_path}")
 
     result = {
         "model": args.model,

@@ -8,7 +8,6 @@
 """
 from __future__ import annotations
 
-import os
 import pickle
 import sys
 import urllib.request
@@ -43,8 +42,9 @@ def load_pubmed():
             with open(dest, "rb") as f:
                 objects[suffix] = pickle.load(f, encoding="latin1")
 
-    x, y, tx, ty, allx, ally, graph = (objects[k] for k in
-                                       ["x", "y", "tx", "ty", "allx", "ally", "graph"])
+    # ind.pubmed.x 僅為 Planetoid 檔案集完整性而下載，特徵實際由 allx+tx 組成
+    y, tx, ty, allx, ally, graph = (objects[k] for k in
+                                    ["y", "tx", "ty", "allx", "ally", "graph"])
     test_idx = objects["test.index"]
     test_idx_sorted = np.sort(test_idx)
 

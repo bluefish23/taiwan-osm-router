@@ -37,14 +37,19 @@ def daterange(start: str, end: str):
         d0 += timedelta(days=1)
 
 
+def fetch_tisvcloud(url: str, dest: Path) -> None:
+    """下載 tisvcloud 檔案。其憑證缺 Subject Key Identifier，
+    Python ssl 會拒絕，統一改走 curl（predict_service 也共用此函式）。"""
+    subprocess.run(["curl", "-sf", "-o", str(dest), url], check=True)
+
+
 def download_day(day: str) -> Path:
     dest = DATA_DIR / "raw" / f"M05A_{day}.tar.gz"
     dest.parent.mkdir(parents=True, exist_ok=True)
     if not dest.exists():
         url = f"{BASE_URL}/M05A_{day}.tar.gz"
         print(f"downloading {url}")
-        # tisvcloud 的憑證缺 Subject Key Identifier，Python ssl 會拒絕，改用 curl
-        subprocess.run(["curl", "-sf", "-o", str(dest), url], check=True)
+        fetch_tisvcloud(url, dest)
     return dest
 
 

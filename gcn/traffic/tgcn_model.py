@@ -14,14 +14,19 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+_GCN_DIR = str(Path(__file__).resolve().parent.parent)
+if _GCN_DIR not in sys.path:
+    sys.path.insert(0, _GCN_DIR)
 from gcn_layer import GCNLayer  # noqa: E402
 
 
 class TGCN(nn.Module):
     """GCN（空間）+ GRU（時間）→ 多步車速預測。
 
-    輸入 x: (B, T, N, F)；輸出: (B, N, H)，H = len(horizons)
+    輸入 x: (B, T, N, F)；輸出: (B, N, H)，H = len(horizons)。
+    空間聚合把批次維攤平成單次稀疏乘法：對每層權重 W，
+    A_hat·(X·W) 以 (N, B·T·hidden) 形狀一次算完（數學上等價於
+    對 B·T 個樣本逐一做 GCN，但快得多）。
     """
 
     def __init__(self, num_features: int, hidden: int = 64,
@@ -38,35 +43,16 @@ class TGCN(nn.Module):
     def forward(self, a_hat: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         b, t, n, f = x.shape
         h = x.reshape(b * t, n, f)
-        # GCN 對 (B·T) 批次逐一做空間聚合：A_hat (N×N) × (N×F)
         for layer in self.gcn:
-            h = torch.stack([layer(a_hat, hi) for hi in h])  # (B·T, N, hidden)
-            h = torch.relu(h)
-        h = h + self.skip(x.reshape(b * t, n, f))             # 殘差
-        h = h.reshape(b, t, n, -1).permute(0, 2, 1, 3)        # (B, N, T, hidden)
-        h = h.reshape(b * n, t, -1)
-        _, h_last = self.gru(h)                               # (1, B·N, hidden)
-        out = self.head(h_last.squeeze(0))                    # (B·N, H)
-        return out.reshape(b, n, -1)
-
-
-class TGCNFast(TGCN):
-    """同 TGCN，但把批次維攤平成一次稀疏乘法（訓練加速用，數學等價）。"""
-
-    def forward(self, a_hat: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        b, t, n, f = x.shape
-        h = x.reshape(b * t, n, f)
-        for layer in self.gcn:
-            # A_hat·(X·W)：把 (B·T, N, F) 轉成 (N, B·T·F) 做單次 spmm
-            support = h @ layer.weight                        # (B·T, N, hidden)
+            support = h @ layer.weight                        # X·W（計畫書 p.5 順序）
             s2 = support.permute(1, 0, 2).reshape(n, -1)      # (N, B·T·hidden)
-            out = torch.sparse.mm(a_hat, s2)
+            out = torch.sparse.mm(a_hat, s2)                  # A_hat·(XW)
             h = out.reshape(n, b * t, -1).permute(1, 0, 2) + layer.bias
             h = torch.relu(h)
         h = h + self.skip(x.reshape(b * t, n, f))             # 殘差
         h = h.reshape(b, t, n, -1).permute(0, 2, 1, 3).reshape(b * n, t, -1)
-        _, h_last = self.gru(h)
-        out = self.head(h_last.squeeze(0))
+        _, h_last = self.gru(h)                               # (1, B·N, hidden)
+        out = self.head(h_last.squeeze(0))                    # (B·N, H)
         return out.reshape(b, n, -1)
 
 

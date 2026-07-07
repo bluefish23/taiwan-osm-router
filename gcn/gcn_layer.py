@@ -24,8 +24,8 @@ def normalize_adjacency(adj: sp.spmatrix) -> sp.coo_matrix:
     adj = adj + adj.T.multiply(adj.T > adj) - adj.multiply(adj.T > adj)
     adj = adj + sp.eye(adj.shape[0], format="coo")
     deg = np.asarray(adj.sum(axis=1)).flatten()
-    d_inv_sqrt = np.power(deg, -0.5, where=deg > 0)
-    d_inv_sqrt[deg == 0] = 0.0
+    d_inv_sqrt = np.zeros_like(deg, dtype=np.float64)
+    np.power(deg, -0.5, where=deg > 0, out=d_inv_sqrt)
     d_mat = sp.diags(d_inv_sqrt)
     return sp.coo_matrix(d_mat @ adj @ d_mat)
 

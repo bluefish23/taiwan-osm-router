@@ -29,6 +29,29 @@ def _out_normalized(adj: sp.spmatrix) -> sp.csr_matrix:
     return sp.diags(inv) @ csr
 
 
+def _push(pt: sp.csr_matrix, res: np.ndarray, damping: float,
+          tol: float) -> tuple[np.ndarray, int]:
+    """批次殘差推送核心（向量化 Gauss–Jacobi push），推到收斂。
+
+    LocalPushPageRank 與 DirectDependencyIndex 共用同一份傳播數學，
+    避免兩份實作漂移導致 benchmark 比較失真。
+    回傳 (解向量增量 x, 觸碰節點更新總數)。res 會被就地消耗至 0。
+    """
+    x = np.zeros_like(res)
+    touched = 0
+    while True:
+        active = np.abs(res) > tol
+        n_active = int(active.sum())
+        if n_active == 0:
+            return x, touched
+        delta = np.where(active, res, 0.0)
+        res[active] = 0.0
+        x += delta
+        touched += n_active
+        # 把 damping·delta 沿出邊分給鄰居（P^T @ delta 一次算完整批）
+        res += damping * (pt @ delta)
+
+
 def pagerank_full(adj: sp.spmatrix, personalization: np.ndarray | None = None,
                   damping: float = DAMPING, tol: float = TOL,
                   max_iter: int = 200) -> tuple[np.ndarray, int]:
@@ -69,22 +92,11 @@ class LocalPushPageRank:
         self._push_all()
 
     def _push_all(self) -> None:
-        """批次推送殘差直到收斂（向量化的 Gauss–Jacobi push）。
-
-        每輪只處理殘差超過門檻的「活躍節點」，其餘節點完全不動——
-        更新量正比於受影響的傳播鏈範圍，而非全圖大小。
-        """
-        while True:
-            active = np.abs(self.res) > self.tol
-            n_active = int(active.sum())
-            if n_active == 0:
-                break
-            delta = np.where(active, self.res, 0.0)
-            self.res[active] = 0.0
-            self.r += delta
-            self.touched += n_active
-            # 把 damping·delta 沿出邊分給鄰居（P^T @ delta 一次算完整批）
-            self.res += self.damping * (self.pt @ delta)
+        """把殘差推送到收斂。每輪只處理殘差超過門檻的「活躍節點」，
+        其餘節點完全不動——更新量正比於受影響的傳播鏈範圍，而非全圖大小。"""
+        x, touched = _push(self.pt, self.res, self.damping, self.tol)
+        self.r += x
+        self.touched += touched
 
     def update_source(self, node: int, delta: float) -> None:
         """來源向量（節點狀態）在 node 改變 delta，增量修正 PageRank。"""
@@ -106,37 +118,34 @@ class DirectDependencyIndex:
         self.cores = np.asarray(cores)
         self.damping = damping
         self.tol = tol
-        self.index: dict[int, np.ndarray] = {}   # core i -> 對全部節點的影響向量
+        self._pt = sp.csr_matrix(_out_normalized(adj).T)
+        # core i -> 稀疏影響（受影響節點 idx, 係數 vals）。
+        # 影響向量本質上是局部的（殘差 < tol 即歸零），存稀疏格式
+        # 讓索引在大圖（如 169K 節點、12 萬核心）上不會撐爆記憶體。
+        self.index: dict[int, tuple[np.ndarray, np.ndarray]] = {}
         self.flags: dict[int, str] = {int(c): "N" for c in self.cores}
         self.compute_count = 0
 
-    def influence_vector(self, core: int) -> np.ndarray:
-        """核心節點 core 的單位來源變化對所有節點的影響（含 α,β 線性關係）。"""
+    def influence_vector(self, core: int) -> tuple[np.ndarray, np.ndarray]:
+        """核心節點 core 的單位來源變化的稀疏影響 (idx, vals)（α,β 線性關係）。"""
         core = int(core)
         if self.flags.get(core) != "A":
             # 解 (I - d·P^T) x = (1-d)·e_core —— 即單位 delta 的完整傳播結果
-            if not hasattr(self, "_pt"):
-                self._pt = sp.csr_matrix(_out_normalized(self.adj).T)
-            n = self.adj.shape[0]
-            x = np.zeros(n)
-            res = np.zeros(n)
+            res = np.zeros(self.adj.shape[0])
             res[core] = 1.0 - self.damping
-            while True:
-                active = np.abs(res) > self.tol
-                if not active.any():
-                    break
-                delta = np.where(active, res, 0.0)
-                res[active] = 0.0
-                x += delta
-                res += self.damping * (self._pt @ delta)
-            self.index[core] = x
+            x, _ = _push(self._pt, res, self.damping, self.tol)
+            nz = np.nonzero(x)[0]
+            self.index[core] = (nz, x[nz].copy())
             self.flags[core] = "A"
             self.compute_count += 1
         return self.index[core]
 
     def apply_update(self, r: np.ndarray, core: int, delta: float) -> np.ndarray:
         """r 直接加上 core 變化 delta 的影響——一步到位，不沿傳播鏈逐點更新。"""
-        return r + delta * self.influence_vector(core)
+        idx, vals = self.influence_vector(core)
+        out = r.copy()
+        out[idx] += delta * vals
+        return out
 
 
 if __name__ == "__main__":
@@ -160,6 +169,8 @@ if __name__ == "__main__":
     err2 = np.abs(lp.r / lp.r.sum() - r_ref / r_ref.sum()).sum()
     print(f"incremental vs full-recompute: L1 err = {err2:.2e}  (應 < 1e-6)")
 
-    idx = DirectDependencyIndex(adj, find_core_nodes(adj))
-    v = idx.influence_vector(5)
-    print(f"influence(v5) 前 8 節點: {np.round(v[:8], 5)}  flag={idx.flags[5]}")
+    ddi = DirectDependencyIndex(adj, find_core_nodes(adj))
+    nz, vals = ddi.influence_vector(5)
+    dense = np.zeros(n)
+    dense[nz] = vals
+    print(f"influence(v5) 前 8 節點: {np.round(dense[:8], 5)}  flag={ddi.flags[5]}")

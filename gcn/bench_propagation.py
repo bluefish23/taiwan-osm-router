@@ -66,6 +66,7 @@ def main() -> None:
     core_picks = rng.choice(cores, size=args.updates // 2, replace=False)
     rand_picks = rng.choice(n, size=args.updates - len(core_picks), replace=False)
     active_nodes = np.concatenate([core_picks, rand_picks])
+    core_set = set(cores.tolist())
 
     rows = []
     s = np.ones(n) / n
@@ -96,7 +97,7 @@ def main() -> None:
         else:
             t_c_first = t_c_cached = None
 
-        rows.append({"node": v, "is_core": bool(v in set(cores.tolist())),
+        rows.append({"node": v, "is_core": v in core_set,
                      "t_full": t_a, "touched_full": touched_a,
                      "t_incr": t_b, "touched_incr": touched_b, "err_incr": err_b,
                      "t_direct_first": t_c_first, "t_direct_cached": t_c_cached})

@@ -955,7 +955,12 @@ async function loadOverlays(){
     for(const ev of events){
       const lat=+ev.lat,lon=+ev.lon,sev=+ev.severity||0.5,rad=(+ev.radius_km||0.5)*1000;
       if(!lat||!lon)continue;
-      if(ev.event_type==='congestion'&&ev.source==='realtime'){
+      if(ev.source==='prediction'){
+        // GCN 預測壅塞（新增圖層分支，不影響原本 realtime/manual 事件邏輯）
+        cE++;
+        L.circle([lat,lon],{radius:rad,fillColor:'#b388ff',color:'#7c4dff',weight:2,dashArray:'6 4',fillOpacity:.18,opacity:.7})
+          .bindPopup(`🔮 ${ev.description||'預測壅塞'} sev=${sev.toFixed(2)}`).addTo(overlayGroups.events);
+      }else if(ev.event_type==='congestion'&&ev.source==='realtime'){
         cC++;
         L.circleMarker([lat,lon],{radius:4,fillColor:sevColor(sev),color:'rgba(0,0,0,.3)',weight:1,fillOpacity:.8})
           .bindPopup(`壅塞 sev=${sev.toFixed(2)}`).addTo(overlayGroups.congestion);

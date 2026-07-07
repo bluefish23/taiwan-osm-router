@@ -102,8 +102,20 @@ uvicorn osm_api:app --host 127.0.0.1 --port 8000
 | POST | `/dynamic/recompute` | 重算動態成本 |
 | GET | `/sync/status` | 同步狀態 |
 | POST | `/sync/trigger` | 手動觸發同步 |
+| POST | `/predict/run` | 跑 T-GCN 車速預測，寫入 source='prediction' 事件（背景） |
+| GET | `/predict/status` | 預測執行狀態與上次結果 |
+| GET | `/predict/congestion` | 列出預測壅塞事件 |
+| DELETE | `/predict/events` | 清除預測事件（不動 manual/realtime） |
 
 - 座標範圍檢查：lat 21.5~26.5, lon 118~122.5（台灣）
+
+### gcn/ — GCN 加速實作與交通預測（教授計畫書）
+
+- `gcn/README.md` 為總覽；`gcn/traffic/predict_service.py` 把 T-GCN 預測轉成
+  `source='prediction'` 的 dynamic_events，重用既有 recompute 機制套用成本，
+  與 manual/realtime 事件互不干擾（各自清各自的 source）
+- 訓練資料：高公局 M05A（`gcn/traffic/download_m05a.py`，tisvcloud 憑證問題須走 curl）
+- 模型 checkpoint：`gcn/results/traffic_tgcn.ckpt`（重訓會覆寫）
 
 ### index.html — 前端 UI
 

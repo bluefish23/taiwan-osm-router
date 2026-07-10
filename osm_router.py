@@ -177,6 +177,7 @@ class OSMRouter:
         self._edge_index: Dict[str, Tuple[int, int]] = {}
         self._modified_edges: set = set()
         self._signal_nodes: set = set()
+        self._base_graph_nodes: frozenset = frozenset()
         self._graph_lock = threading.RLock()
 
     def init_dynamic_schema(self):
@@ -298,6 +299,9 @@ class OSMRouter:
         kept_edges = sum(len(v) for v in graph.values())
         self._graph_node_count = len(graph)
         self._graph_edge_count = kept_edges
+        # 載入時的節點快照：nearest_node 以此篩選，確保起終點解析
+        # 不受路由時的端點局部圖合併影響（見 nearest_node 註解）
+        self._base_graph_nodes = frozenset(graph.keys())
         self._graph_loaded = True
         self._load_signal_nodes()
         gc.collect()
@@ -364,7 +368,11 @@ class OSMRouter:
                     (lat - dlat, lat + dlat, lon - dlon, lon + dlon),
                 ).fetchall()
                 if prefer_major and self._graph_loaded:
-                    in_graph = [r for r in rows if r["node_id"] in self._graph]
+                    # 用「載入時的主幹圖節點快照」篩選，而非目前的 self._graph——
+                    # 路由時端點局部圖會被合併進 self._graph，若以其成員篩選，
+                    # 第一次與後續呼叫會解析出不同的起終點節點（路線不一致）
+                    base_nodes = self._base_graph_nodes or self._graph
+                    in_graph = [r for r in rows if r["node_id"] in base_nodes]
                     non_hw = [r for r in in_graph if r["hw"] not in self._MOTORWAY_HW]
                     pool = non_hw if non_hw else in_graph
                     if pool:

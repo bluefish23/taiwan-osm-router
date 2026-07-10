@@ -182,6 +182,7 @@ class OSMRouter:
         self._signal_nodes: set = set()
         self._base_graph_nodes: frozenset = frozenset()
         self._local_cells: set = set()   # 已合併局部圖的網格快取
+        self._all_roads_loaded = False   # True=全路網已在記憶體，路由免查 DB
         self._graph_lock = threading.RLock()
 
     def init_dynamic_schema(self):
@@ -267,29 +268,39 @@ class OSMRouter:
                    la, loa, lb, lob)
         return fn, tn, la, loa, lb, lob, rec
 
-    def load_graph(self, verbose=True) -> int:
+    def load_graph(self, verbose=True, all_roads=False) -> int:
+        """all_roads=True：全類型路網一次載入記憶體（路由不再查 DB 局部圖），
+        啟動較慢、記憶體較高；起終點吸附仍以主幹節點為準（見下）。"""
         import time; t0=time.time()
-        if verbose: print("載入主幹路網...",flush=True)
+        if verbose: print("載入全類型路網..." if all_roads else "載入主幹路網...",flush=True)
         gc.collect()
         hw_ph=",".join("?"*len(MAJOR_HW))
         graph = collections.defaultdict(list)
         ncoords = {}
         edge_count = 0
+        major_nodes = set()
+        major_set = set(MAJOR_HW)
         comp_filter = self._has_component_id()
         comp_clause = " AND component_id=0" if comp_filter else ""
+        # 全載時不能用 component_id 過濾（連通分量僅對主幹路網計算過，
+        # 其餘邊為預設 -1），改為全撈；孤島由主幹吸附策略避開
+        where = "" if all_roads else f" WHERE highway IN ({hw_ph}){comp_clause}"
+        params = () if all_roads else tuple(MAJOR_HW)
         with _conn(self.db_path) as conn:
             cur=conn.execute(f"""SELECT from_node,to_node,edge_id,highway,name,
                 length_km,speed_kmh,lat_a,lon_a,lat_b,lon_b,
                 COALESCE(dynamic_mult,1.0) AS mult,
                 COALESCE(closure_flag,0) AS closed,
                 COALESCE(risk_score,0) AS risk
-                FROM osm_edges WHERE highway IN ({hw_ph}){comp_clause}""",MAJOR_HW)
+                FROM osm_edges{where}""",params)
             for r in cur:
                 edge_count += 1
                 if int(r["closed"] or 0): continue
                 fn, tn, la, loa, lb, lob, rec = self._build_edge(r)
                 graph[fn].append(rec)
                 ncoords[fn] = (la, loa); ncoords[tn] = (lb, lob)
+                if all_roads and r["highway"] in major_set:
+                    major_nodes.add(fn); major_nodes.add(tn)
 
         edge_index = {}
         for fn, edges in graph.items():
@@ -304,8 +315,10 @@ class OSMRouter:
         self._graph_node_count = len(graph)
         self._graph_edge_count = kept_edges
         # 載入時的節點快照：nearest_node 以此篩選，確保起終點解析
-        # 不受路由時的端點局部圖合併影響（見 nearest_node 註解）
-        self._base_graph_nodes = frozenset(graph.keys())
+        # 不受路由時的端點局部圖合併影響（見 nearest_node 註解）。
+        # 全載模式下仍只吸附主幹節點，避免吸到與主網不連通的孤島巷弄
+        self._base_graph_nodes = frozenset(major_nodes) if all_roads else frozenset(graph.keys())
+        self._all_roads_loaded = all_roads
         self._graph_loaded = True
         self._load_signal_nodes()
         gc.collect()
@@ -435,7 +448,8 @@ class OSMRouter:
 
         LOCAL_PAD = 0.02
         CELL = 0.01   # 局部圖快取網格（~1.1km）；同格端點不重複載 DB
-        for anchor_la, anchor_lo in ((s_la, s_lo), (e_la, e_lo)):
+        anchors = () if self._all_roads_loaded else ((s_la, s_lo), (e_la, e_lo))
+        for anchor_la, anchor_lo in anchors:
             cell = (round(anchor_la / CELL), round(anchor_lo / CELL))
             if cell in self._local_cells:
                 continue

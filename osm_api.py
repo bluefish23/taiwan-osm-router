@@ -39,7 +39,9 @@ async def lifespan(app):
         _router = OSMRouter(db)
         _router.init_dynamic_schema()
         _router.ensure_component_ids()
-        _router.load_graph(verbose=True)
+        # PRELOAD_ALL_ROADS=1：全路網載入記憶體（路由零 DB 查詢，適合大 RAM 機器）
+        _router.load_graph(verbose=True,
+                           all_roads=os.getenv("PRELOAD_ALL_ROADS", "0") == "1")
 
         print("[startup] TDX/CWA sync disabled (demo mode — manual events only)")
 

@@ -153,6 +153,7 @@ uvicorn osm_api:app --host 127.0.0.1 --port 8000
 | `CWB_API_KEY` | CWA 氣象署 API Key | — |
 | `DB_PATH` | SQLite 路徑 | `taiwan_osm.db` |
 | `AUTO_SYNC_INTERVAL` | 同步間隔秒數，0=停用 | `300` |
+| `PRELOAD_ALL_ROADS` | 1=全路網載入記憶體（765 萬邊，啟動 ~100s、RAM ~6.2GB，路由零 DB 查詢、無首查尖峰；重複查詢略慢於快取模式因搜尋分支較多）。0=主幹預載+端點局部圖網格快取（預設） | `0` |
 
 ## 開發注意事項
 

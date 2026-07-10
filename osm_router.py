@@ -50,6 +50,8 @@ MODE_WEIGHTS = {
 INCIDENT_MULT = {
     "accident":1.80,"construction":1.55,"closure":999.0,"congestion":1.35,"manual":1.25,
     "landslide_closure":999.0,"landslide_high":3.0,"landslide_warning":1.5,
+    # T-GCN 預測壅塞：severity = (自由流速/預測速)/3.5，故 sev×3.5 = 實際時間乘數
+    "predicted_congestion":3.5,
 }
 RAIN_M,WIND_M,VIS_M,WARN_M = 0.40,0.20,0.35,0.30
 VALID_HIGHWAYS = {"motorway","motorway_link","trunk","trunk_link","primary","primary_link",
@@ -68,7 +70,8 @@ BASE_RADIUS = {
     "landslide_warning":1.0,"landslide_high":1.5,"landslide_closure":2.0,"manual":0.5,
 }
 RISK_ADDITION = {"accident":8,"construction":5,"congestion":3,"manual":2,
-                 "landslide_warning":6,"landslide_high":10}
+                 "landslide_warning":6,"landslide_high":10,
+                 "predicted_congestion":2}   # 預測壅塞以時間為主，risk 佔比低
 BASE_SEVERITY = {
     "accident":0.80,"construction":0.50,"closure":1.00,"congestion":0.60,
     "manual":0.50,"landslide_warning":0.60,"landslide_high":0.85,"landslide_closure":1.00,
@@ -178,6 +181,7 @@ class OSMRouter:
         self._modified_edges: set = set()
         self._signal_nodes: set = set()
         self._base_graph_nodes: frozenset = frozenset()
+        self._local_cells: set = set()   # 已合併局部圖的網格快取
         self._graph_lock = threading.RLock()
 
     def init_dynamic_schema(self):
@@ -430,18 +434,29 @@ class OSMRouter:
         direct_km = haversine_km(s_la, s_lo, e_la, e_lo)
 
         LOCAL_PAD = 0.02
+        CELL = 0.01   # 局部圖快取網格（~1.1km）；同格端點不重複載 DB
         for anchor_la, anchor_lo in ((s_la, s_lo), (e_la, e_lo)):
-            bbox = (anchor_la - LOCAL_PAD, anchor_lo - LOCAL_PAD,
-                    anchor_la + LOCAL_PAD, anchor_lo + LOCAL_PAD)
+            cell = (round(anchor_la / CELL), round(anchor_lo / CELL))
+            if cell in self._local_cells:
+                continue
+            # 以格心為中心、外加一格 padding，保證格內任一點都有原本
+            # LOCAL_PAD 範圍的完整覆蓋（快取不縮小覆蓋保證）
+            cla, clo = cell[0] * CELL, cell[1] * CELL
+            bbox = (cla - LOCAL_PAD - CELL, clo - LOCAL_PAD - CELL,
+                    cla + LOCAL_PAD + CELL, clo + LOCAL_PAD + CELL)
             local, _ = self._load_local_graph(bbox, pad=0.005)
             for fn, edges in local.items():
                 if fn not in graph:
                     graph[fn] = edges
+                    for idx, e in enumerate(edges):
+                        self._edge_index.setdefault(e.eid, (fn, idx))
                 else:
                     existing_eids = {e.eid for e in graph[fn]}
                     for e in edges:
                         if e.eid not in existing_eids:
                             graph[fn].append(e)
+                            self._edge_index.setdefault(e.eid, (fn, len(graph[fn]) - 1))
+            self._local_cells.add(cell)
 
         w = MODE_WEIGHTS.get(mode, MODE_WEIGHTS["balanced"])
         night_r = _night_risk_score()
@@ -469,7 +484,7 @@ class OSMRouter:
                 while cur in came_from:
                     prev, e = came_from[cur]
                     tsf = _time_speed_factor(e.hw)
-                    seg_min = (e.dist / max(e.spd * tsf, MIN_SPEED)) * 60
+                    seg_min = e.cost / tsf   # 含事件速度乘數（與搜尋成本一致）
                     edges.append({
                         "edge_id": e.eid, "highway": e.hw, "name": e.name,
                         "length_km": e.dist, "speed_kmh": e.spd,
@@ -496,7 +511,10 @@ class OSMRouter:
             for e in graph.get(node, []):
                 nxt = e.to
                 tsf = _time_speed_factor(e.hw)
-                adj_cost = (e.dist / max(e.spd * tsf, MIN_SPEED)) * 60
+                # e.cost 已含事件速度乘數（dynamic_mult 折進時間，見
+                # _apply_dynamic_to_graph）；除以時段係數得當下有效時間。
+                # 中性狀態 e.cost=(dist/spd)*60，與舊公式完全等價。
+                adj_cost = e.cost / tsf
                 risk = e.risk + night_r
                 ec2 = adj_cost * (w["time"] + risk * w["risk"])
                 if ec2 >= 1e8:

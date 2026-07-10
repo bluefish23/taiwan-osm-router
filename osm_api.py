@@ -326,9 +326,20 @@ def _do_predict(at_index: Optional[int]):
         _gcn_path()
         from traffic.predict_service import run_prediction
         result = run_prediction(get_r().db_path, at_index)
+        # 預測事件立即增量套用（重用原系統 apply_event_incremental），
+        # 事件一產生路由馬上反應，不需等待全圖 recompute
+        t0 = time.perf_counter()
+        applied_edges = 0
+        for eid in result.get("event_ids", []):
+            applied_edges += get_r().apply_event_incremental(eid).get("applied", 0)
+        result["incremental_apply_ms"] = round((time.perf_counter() - t0) * 1000, 1)
+        result["incremental_applied_edges"] = applied_edges
+        result["note"] = "事件已寫入並立即增量套用；清除還原時才需 /dynamic/recompute"
         _predict_status.update(running=False, last_ok=time.time(),
                                last_error=None, last_result=result)
-        _log.info("prediction done: %s events", result.get("events_created"))
+        _log.info("prediction done: %s events, %s edges applied in %sms",
+                  result.get("events_created"), applied_edges,
+                  result.get("incremental_apply_ms"))
     except Exception as e:
         _predict_status.update(running=False, last_error=str(e))
         _log.exception("prediction failed")
@@ -341,7 +352,7 @@ def predict_run(at_index: Optional[int] = None, _=Depends(require_admin)):
     _predict_status["running"] = True
     _predict_status["last_error"] = None
     threading.Thread(target=_do_predict, args=(at_index,), daemon=True).start()
-    return {"ok": True, "message": "預測已開始（背景執行），完成後呼叫 /dynamic/recompute 套用"}
+    return {"ok": True, "message": "預測已開始（背景執行），完成即自動增量套用至路網"}
 
 @app.get("/predict/status")
 def predict_status():

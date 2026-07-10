@@ -153,13 +153,16 @@ def run_prediction(db_path: str, at_index: int | None = None,
             skipped += 1
             continue
         (lat1, lon1), (lat2, lon2) = gantry_pos[frm], gantry_pos[to]
-        # severity 公式同 realtime_sync（ratio<0.7 保證 severity>=0.3）
-        severity = float(min(1.0, max(0.0, 1.0 - ratio[i])))
+        # 事件類型 predicted_congestion：把 T-GCN 的精確預測直接化為時間乘數。
+        # 路由端公式為 mult = severity × INCIDENT_MULT(3.5)，
+        # 故 severity = (自由流速/預測速)/3.5 → 乘數 = 自由流速/預測速（上限 3.5×）
+        time_mult = float(freeflow[i] / max(pred_speed[i], 1.0))
+        severity = float(min(1.0, time_mult / 3.5))
         rows.append((
-            f"pred_{uuid.uuid4().hex[:12]}", "congestion", severity, "motorway",
+            f"pred_{uuid.uuid4().hex[:12]}", "predicted_congestion", severity, "motorway",
             (lat1 + lat2) / 2, (lon1 + lon2) / 2, EVENT_RADIUS_KM,
             f"[預測+{horizon_min}分] {sections[i]} 預測 {pred_speed[i]:.0f}km/h "
-            f"(自由流 {freeflow[i]:.0f})", 1, now, "prediction",
+            f"(自由流 {freeflow[i]:.0f}, 時間×{min(time_mult, 3.5):.2f})", 1, now, "prediction",
         ))
 
     clear_predictions(db_path)
@@ -174,9 +177,10 @@ def run_prediction(db_path: str, at_index: int | None = None,
         "sections_total": int(len(sections)),
         "predicted_congested": int(len(congested)),
         "events_created": len(rows),
+        "event_ids": [row[0] for row in rows],
         "skipped_no_gantry_pos": skipped,
         "mean_predicted_speed": round(float(pred_speed.mean()), 1),
-        "note": "事件已寫入（source='prediction'），呼叫 /dynamic/recompute 套用至路網成本",
+        "note": "事件已寫入（source='prediction'）",
     }
 
 

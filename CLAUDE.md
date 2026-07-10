@@ -59,16 +59,22 @@ uvicorn osm_api:app --host 127.0.0.1 --port 8000
 ### osm_router.py — A* 路由引擎
 
 - **圖載入策略**：啟動時預載主幹路網（motorway～tertiary）到記憶體；短程 ≤15km 另查局部全類型路網
+- **端點局部圖快取**：路由時端點周邊局部圖按 0.01° 網格快取（`_local_cells`），同區域重複查詢不重讀 DB（首查 ~5s → 之後 ~0.5s）；合併的局部邊登記進 `_edge_index`，事件增量套用/重算可更新到
+- **起終點解析**：`nearest_node` 以載入時節點快照（`_base_graph_nodes`）篩選，不受局部圖合併影響，同一請求結果恆一致
+- **事件立即生效**：手動事件（POST /events）與預測事件（POST /predict/run）都走 `apply_event_incremental` 即時增量套用（~1.4s/26 事件），全圖 recompute 僅用於清除還原與天氣
 - **三種路線模式**：
   - `fastest` — time=1.0, risk=0.10（最快到達）
   - `balanced` — time=1.0, risk=0.40（平衡速度與安全）
   - `safest` — time=1.0, risk=0.90（優先安全）
 - **成本公式**：`edge_cost = adj_time × (time_weight + risk × risk_weight) + turn_penalty + signal_delay`
-  - `adj_time = (dist / (speed × time_factor)) × 60` (分鐘，time_factor 為時段速度乘數)
+  - `adj_time = edge.cost / time_factor`，其中 `edge.cost = (dist / (speed / dynamic_mult)) × 60`
+    ——**事件速度乘數折進時間項，所有模式都會反應**（2026-07 改版：壅塞是時間損失
+    而非風險偏好）；中性狀態等價於 `(dist / (speed × time_factor)) × 60`
+  - 分模式（risk_weight）保留給偏好型因素：事故風險、天氣、夜間
   - `risk = dynamic_risk + night_risk`（夜間 +0.05~0.25）
   - `turn_penalty`：轉彎延遲（直行 0s, 左右轉 10s, U-turn 25s）
   - `signal_delay`：每個號誌路口 +20s（高速公路免計）
-- **事件成本乘數**：accident=1.80, construction=1.55, closure=999, congestion=1.35, manual=1.25, landslide_warning=1.5, landslide_high=3.0, landslide_closure=999
+- **事件成本乘數**：accident=1.80, construction=1.55, closure=999, congestion=1.35, manual=1.25, landslide_warning=1.5, landslide_high=3.0, landslide_closure=999, **predicted_congestion=3.5**（T-GCN 專用：severity=(自由流速/預測速)/3.5，故 sev×3.5=精確時間乘數）
 - **天氣成本乘數**：`1.0 + 0.40×rain + 0.20×wind + 0.35×visibility + 0.30×warning`
 - **時段速度**：尖峰 (7-9, 17-19) motorway ×0.85, primary ×0.70, tertiary ×0.62；離峰 ×1.0
 - **道路速度**：motorway=110, trunk=90, primary=60, secondary=50, tertiary=40, residential=30 km/h

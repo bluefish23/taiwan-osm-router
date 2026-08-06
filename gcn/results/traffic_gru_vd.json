@@ -1,0 +1,54 @@
+{
+  "model": "gru",
+  "config": {
+    "epochs": 50,
+    "lr": 0.001,
+    "hidden": 64,
+    "batch": 32,
+    "patience": 8,
+    "model": "gru",
+    "data": "gcn/data/vd/vd_matrix.npz",
+    "tag": "_vd",
+    "in_steps": 12,
+    "horizons": [
+      1,
+      3,
+      6
+    ],
+    "device": "cuda"
+  },
+  "graph": {
+    "nodes": 1087,
+    "edges": 1071
+  },
+  "train_seconds": 146.9,
+  "test_metrics": {
+    "MAE@5min": 3.928,
+    "RMSE@5min": 5.938,
+    "MAE@15min": 4.198,
+    "RMSE@15min": 6.686,
+    "MAE@30min": 4.495,
+    "RMSE@30min": 7.404
+  },
+  "baseline_naive": {
+    "MAE@5min": 5.035,
+    "RMSE@5min": 7.42,
+    "MAE@15min": 5.376,
+    "RMSE@15min": 8.211,
+    "MAE@30min": 5.686,
+    "RMSE@30min": 8.974
+  },
+  "baseline_historical_average": {
+    "MAE@5min": 5.379,
+    "RMSE@5min": 8.763,
+    "MAE@15min": 5.379,
+    "RMSE@15min": 8.763,
+    "MAE@30min": 5.38,
+    "RMSE@30min": 8.764
+  },
+  "anomaly_detection": {
+    "count": 20084,
+    "rate": 0.01533,
+    "note": "殘差 z>3 之 (時間窗, 路段)；precision/recall 需事件標記（未來以 TDX 事故資料對齊）"
+  }
+}

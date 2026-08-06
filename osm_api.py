@@ -87,6 +87,38 @@ def serve_user():
 def serve_admin(_=Depends(require_admin)):
     return FileResponse(_STATIC_DIR / "admin.html", media_type="text/html")
 
+@app.get("/revgeocode")
+async def revgeocode(lat: float = Query(...), lon: float = Query(...)):
+    """反向地理編碼（事件通知顯示地點用）。Nominatim reverse + 快取。"""
+    chk(lat, lon, "revgeocode")
+    key = f"rev:{lat:.4f},{lon:.4f}"
+    now = time.time()
+    with _cache_lock:
+        if key in _geocode_cache:
+            ts, result = _geocode_cache[key]
+            if now - ts < 3600:          # 地名不會變，快取久一點
+                return result
+    name = ""
+    try:
+        async with httpx.AsyncClient(timeout=6) as client:
+            r = await client.get(
+                "https://nominatim.openstreetmap.org/reverse",
+                params={"lat": lat, "lon": lon, "format": "json", "zoom": "16",
+                        "accept-language": "zh-TW"},
+                headers={"User-Agent": "TaiwanOSMRouter/1.0"})
+            if r.status_code == 200:
+                j = r.json()
+                a = j.get("address", {})
+                # 中文地址由大到小：縣市 → 區 → 路名
+                parts = [a.get(k, "") for k in ("county", "city", "city_district", "town", "suburb", "road")]
+                name = "".join(dict.fromkeys(p for p in parts if p))[:40] or j.get("display_name", "")[:40]
+    except Exception:
+        pass
+    result = {"name": name}
+    with _cache_lock:
+        _geocode_cache[key] = (now, result)
+    return result
+
 @app.get("/geocode")
 async def geocode(q: str = Query(..., min_length=1, max_length=200)):
     now = time.time()
@@ -372,6 +404,20 @@ def clear_prediction_events(_=Depends(require_admin)):
     n = clear_predictions(get_r().db_path)
     return {"ok": True, "deleted": n,
             "note": "如事件先前已套用成本，請呼叫 /dynamic/recompute 重置"}
+
+@app.get("/predict/compare")
+def predict_compare(at_index: int):
+    """demo：回傳指定時間點的預測 vs 實際車速（不寫 DB）。"""
+    _gcn_path()
+    from traffic.predict_service import compare_prediction
+    try:
+        return compare_prediction(at_index)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+@app.get("/predict/demo", response_class=FileResponse)
+def predict_demo():
+    return FileResponse(_STATIC_DIR / "demo_predict.html", media_type="text/html")
 
 @app.post("/route")
 def route(req:RouteReq):

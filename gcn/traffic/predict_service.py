@@ -184,6 +184,58 @@ def run_prediction(db_path: str, at_index: int | None = None,
     }
 
 
+def compare_prediction(at_index: int, horizon_pick: int = -1) -> dict:
+    """demo：回傳指定時間點的「預測 vs 實際」車速對比（重播模式）。
+
+    不寫入 DB，純比對。實際車速取自矩陣（重播資料的未來真值）。
+    """
+    global _PREDICTOR
+    data = np.load(DATA, allow_pickle=True)
+    speed, volume = data["speed"], data["volume"]
+    sections = data["sections"]
+    timestamps = data["timestamps"].astype("datetime64[ns]")
+    if _PREDICTOR is None:
+        _PREDICTOR = TrafficPredictor()
+    p = _PREDICTOR
+
+    horizon_steps = p.horizons[horizon_pick]
+    horizon_min = horizon_steps * 5
+    t0 = at_index - p.in_steps
+    t_target = at_index + horizon_steps - 1
+    lo, hi = p.in_steps, speed.shape[0] - max(p.horizons)
+    if not (lo <= at_index <= hi):
+        raise ValueError(f"時間索引須在 {lo}~{hi} 之間")
+
+    pred_speed = p.predict(speed[t0:at_index], volume[t0:at_index])[:, horizon_pick]
+    actual_speed = speed[t_target]
+    err = np.abs(pred_speed - actual_speed)
+    freeflow = np.percentile(speed, 85, axis=0)
+    ratio = actual_speed / np.maximum(freeflow, 1.0)             # 越小越塞
+
+    rows = [{
+        "section": str(sections[i]),
+        "predicted": round(float(pred_speed[i]), 1),
+        "actual": round(float(actual_speed[i]), 1),
+        "error": round(float(err[i]), 1),
+        "freeflow": round(float(freeflow[i]), 0),
+        "congested": bool(ratio[i] < CONGESTION_RATIO),
+    } for i in range(len(sections))]
+    order = np.argsort(ratio)                                    # 最塞在前
+
+    return {
+        "at_index": int(at_index),
+        "now_time": str(timestamps[at_index - 1]),              # 最後觀測時刻
+        "target_time": str(timestamps[t_target]),               # 預測目標時刻
+        "horizon_min": horizon_min,
+        "mae": round(float(err.mean()), 2),
+        "n_sections": len(sections),
+        "n_congested": int((ratio < CONGESTION_RATIO).sum()),
+        "index_range": [int(lo), int(hi)],
+        "sections": rows,
+        "most_congested": [rows[int(i)] for i in order[:12]],
+    }
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", required=True)

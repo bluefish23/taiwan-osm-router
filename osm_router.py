@@ -19,6 +19,7 @@ import gc
 import heapq
 import itertools
 import math
+import os
 import sqlite3
 import uuid
 from collections import namedtuple
@@ -76,6 +77,14 @@ BASE_SEVERITY = {
     "accident":0.80,"construction":0.50,"closure":1.00,"congestion":0.60,
     "manual":0.50,"landslide_warning":0.60,"landslide_high":0.85,"landslide_closure":1.00,
 }
+# ── 事故衝擊實測校準（新增，預設關閉）────────────────────────────
+# 2026-07 以 164 件國道一號真實事故量測（gcn/results/impact_calibration.json）：
+#   速度比中位數 1.283 → 隱含 severity = 1.283/1.8 = 0.71
+#   回堵延伸中位數 2.15km → BASE_RADIUS 1.1（ω=1 時 ×2 = 2.2km）
+# 設環境變數 IMPACT_CALIBRATED=1 啟用；未設時原參數與行為完全不變。
+if os.getenv("IMPACT_CALIBRATED", "0") == "1":
+    BASE_SEVERITY["accident"] = 0.71
+    BASE_RADIUS["accident"] = 1.1
 MAX_SPEED = 120.0
 SHORT_DIST_KM = 15.0
 _CTR = itertools.count()

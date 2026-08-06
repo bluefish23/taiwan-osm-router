@@ -79,24 +79,32 @@ def main() -> None:
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--patience", type=int, default=8)
     ap.add_argument("--model", choices=["tgcn", "gru"], default="tgcn")
+    ap.add_argument("--data", default=str(DATA), help="矩陣路徑（預設 M05A，VD 用 data/vd/vd_matrix.npz）")
+    ap.add_argument("--tag", default="", help="輸出檔名後綴（如 _vd），避免覆蓋 M05A 結果")
     args = ap.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    data = np.load(DATA, allow_pickle=True)
+    data = np.load(args.data, allow_pickle=True)
     speed, volume = data["speed"], data["volume"]
     sections = data["sections"]
     T, N = speed.shape
     print(f"data: {T} steps x {N} sections, model={args.model}, device={device}")
 
-    adj = build_adjacency(sections)
+    # 圖：VD 矩陣已預建 edges（按里程連鏈）；M05A 則現場以門架配對建圖
+    if "edges" in data.files:
+        import scipy.sparse as _sp
+        e = data["edges"]
+        adj = _sp.coo_matrix((np.ones(e.shape[1]), (e[0], e[1])), shape=(N, N))
+    else:
+        adj = build_adjacency(sections)
     print(f"graph: {adj.nnz} edges")
     a_hat = sparse_to_torch(normalize_adjacency(adj), device)
 
     # 特徵 (T, N, 2)：z-score 正規化的 speed 與 volume（統計量只用訓練段）
     t_train_end = int(T * 0.7)
     t_val_end = int(T * 0.8)
-    sp_mean, sp_std = speed[:t_train_end].mean(), speed[:t_train_end].std()
-    vo_mean, vo_std = volume[:t_train_end].mean(), volume[:t_train_end].std()
+    sp_mean, sp_std = speed[:t_train_end].mean(), max(speed[:t_train_end].std(), 1e-6)
+    vo_mean, vo_std = volume[:t_train_end].mean(), max(volume[:t_train_end].std(), 1e-6)
     feats = np.stack([(speed - sp_mean) / sp_std,
                       (volume - vo_mean) / vo_std], axis=-1).astype(np.float32)
 
@@ -183,7 +191,7 @@ def main() -> None:
     }
 
     # 存 checkpoint 供線上推論（predict_service.py）使用
-    ckpt_path = RESULTS_DIR / f"traffic_{args.model}.ckpt"
+    ckpt_path = RESULTS_DIR / f"traffic_{args.model}{args.tag}.ckpt"
     RESULTS_DIR.mkdir(exist_ok=True)
     torch.save({
         "model": args.model,
@@ -210,7 +218,7 @@ def main() -> None:
     }
     print(json.dumps(result, indent=2, ensure_ascii=False))
     RESULTS_DIR.mkdir(exist_ok=True)
-    out = RESULTS_DIR / f"traffic_{args.model}.json"
+    out = RESULTS_DIR / f"traffic_{args.model}{args.tag}.json"
     out.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"saved -> {out}")
 
@@ -229,8 +237,8 @@ def main() -> None:
     ax.set_title(f"section {sections[node]} ({args.model})")
     ax.legend(); ax.grid(alpha=0.3)
     fig.tight_layout()
-    fig.savefig(RESULTS_DIR / f"traffic_pred_{args.model}.png", dpi=150)
-    print(f"plot -> {RESULTS_DIR / f'traffic_pred_{args.model}.png'}")
+    fig.savefig(RESULTS_DIR / f"traffic_pred_{args.model}{args.tag}.png", dpi=150)
+    print(f"plot -> {RESULTS_DIR / f'traffic_pred_{args.model}{args.tag}.png'}")
 
 
 if __name__ == "__main__":

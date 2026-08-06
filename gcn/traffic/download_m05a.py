@@ -6,7 +6,7 @@
 
 處理流程：
 1. 下載指定日期範圍的 tar.gz
-2. 篩選國道一號主線門架（ID 前綴 01F）
+2. 篩選指定國道門架（ID 前綴，預設含國1/國3/國5/國1高架/國3甲）
 3. 各車種以交通量加權平均出該路段的平均速率
 4. 輸出 (T × N) 速率矩陣 + 路段清單 -> data/m05a/m05a_matrix.npz
 
@@ -26,7 +26,9 @@ import pandas as pd
 
 BASE_URL = "https://tisvcloud.freeway.gov.tw/history/TDCS/M05A"
 DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "m05a"
-GANTRY_PREFIX = "01F"   # 國道一號主線
+# 國道門架前綴（M05A 原始資料本就含多條國道）：
+#   01F 國道一號主線、03F 國道三號、05F 國道五號、01H 國道一號高架、03A 國道三甲
+DEFAULT_PREFIXES = ("01F", "03F", "05F", "01H", "03A")
 
 
 def daterange(start: str, end: str):
@@ -53,8 +55,8 @@ def download_day(day: str) -> Path:
     return dest
 
 
-def parse_day(tar_path: Path) -> pd.DataFrame:
-    """讀取一天的 tar.gz，回傳 volume 加權平均速率的長表。"""
+def parse_day(tar_path: Path, prefixes: tuple[str, ...] = DEFAULT_PREFIXES) -> pd.DataFrame:
+    """讀取一天的 tar.gz，回傳 volume 加權平均速率的長表。只保留起訖門架同屬指定國道者。"""
     frames = []
     with tarfile.open(tar_path, "r:gz") as tar:
         for member in tar.getmembers():
@@ -65,8 +67,8 @@ def parse_day(tar_path: Path) -> pd.DataFrame:
                 continue
             df = pd.read_csv(io.BytesIO(f.read()), header=None,
                              names=["time", "from", "to", "vtype", "speed", "volume"])
-            df = df[df["from"].str.startswith(GANTRY_PREFIX)
-                    & df["to"].str.startswith(GANTRY_PREFIX)]
+            df = df[df["from"].str.startswith(prefixes)
+                    & df["to"].str.startswith(prefixes)]
             if df.empty:
                 continue
             # speed=0 且 volume=0 代表無車，不列入平均
@@ -85,13 +87,17 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--start", required=True)
     ap.add_argument("--end", required=True)
+    ap.add_argument("--prefixes", default=",".join(DEFAULT_PREFIXES),
+                    help="逗號分隔的國道門架前綴，如 01F,03F,05F（預設全部國道）")
     args = ap.parse_args()
+    prefixes = tuple(p.strip() for p in args.prefixes.split(",") if p.strip())
+    print(f"門架前綴：{prefixes}")
 
     all_days = []
     for day in daterange(args.start, args.end):
         try:
             tar_path = download_day(day)
-            all_days.append(parse_day(tar_path))
+            all_days.append(parse_day(tar_path, prefixes))
             print(f"  parsed {day}: {len(all_days[-1]):,} rows")
         except Exception as e:                       # 缺天就跳過
             print(f"  skip {day}: {e}")

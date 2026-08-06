@@ -183,14 +183,28 @@ button{border:none;border-radius:6px;padding:8px 12px;font-family:var(--cond);
 
     <div class="card">
       <div class="card-title">新增事件</div>
-      <label>類型</label>
-      <select id="evType">
-        <option value="accident">車禍 accident</option>
-        <option value="construction">施工 construction</option>
-        <option value="closure">封閉 closure</option>
-        <option value="congestion">壅塞 congestion</option>
-        <option value="manual">手動 manual</option>
-      </select>
+      <div class="row2">
+        <div>
+          <label>類型</label>
+          <select id="evType">
+            <option value="accident">車禍 accident</option>
+            <option value="construction">施工 construction</option>
+            <option value="closure">封閉 closure</option>
+            <option value="congestion">壅塞 congestion</option>
+            <option value="manual">手動 manual</option>
+          </select>
+        </div>
+        <div>
+          <label>方向（國道/快速道路選填）</label>
+          <select id="evDir">
+            <option value="">不指定</option>
+            <option value="北向">北向</option>
+            <option value="南向">南向</option>
+            <option value="東向">東向</option>
+            <option value="西向">西向</option>
+          </select>
+        </div>
+      </div>
       <div class="row2">
         <div><label>緯度</label><input type="number" id="evLat" value="25.0418" step="0.0001" oninput="validateCoord(this,'lat')"/></div>
         <div><label>經度</label><input type="number" id="evLon" value="121.5365" step="0.0001" oninput="validateCoord(this,'lon')"/></div>
@@ -333,8 +347,11 @@ function validateCoord(el,type){
 async function addEvent(){
   const lat=+document.getElementById('evLat').value,lon=+document.getElementById('evLon').value;
   if(lat<21.5||lat>26.5||lon<118||lon>122.5){msg('evMsg','座標超出台灣範圍','err');return;}
+  // 方向以 [北向] 前綴存入描述（不動後端 schema；供未來方向性上游傳播使用）
+  const dir=document.getElementById('evDir').value;
+  const desc=(dir?`[${dir}] `:'')+document.getElementById('evDesc').value;
   const payload={event_type:document.getElementById('evType').value,lat,lon,
-    description:document.getElementById('evDesc').value};
+    description:desc};
   try{
     const d=await call('/events',{method:'POST',body:JSON.stringify(payload)});
     const inc=d.incremental||{};

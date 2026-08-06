@@ -16,37 +16,37 @@
     "device": "cuda"
   },
   "graph": {
-    "nodes": 148,
-    "edges": 146
+    "nodes": 378,
+    "edges": 421
   },
-  "train_seconds": 181.0,
+  "train_seconds": 46.8,
   "test_metrics": {
-    "MAE@5min": 2.0,
-    "RMSE@5min": 3.129,
-    "MAE@15min": 2.638,
-    "RMSE@15min": 5.085,
-    "MAE@30min": 3.334,
-    "RMSE@30min": 6.998
+    "MAE@5min": 2.199,
+    "RMSE@5min": 3.659,
+    "MAE@15min": 2.68,
+    "RMSE@15min": 4.938,
+    "MAE@30min": 3.226,
+    "RMSE@30min": 6.393
   },
   "baseline_naive": {
-    "MAE@5min": 2.401,
-    "RMSE@5min": 3.644,
-    "MAE@15min": 3.108,
-    "RMSE@15min": 5.677,
-    "MAE@30min": 3.874,
-    "RMSE@30min": 7.784
+    "MAE@5min": 2.7,
+    "RMSE@5min": 4.433,
+    "MAE@15min": 3.234,
+    "RMSE@15min": 5.733,
+    "MAE@30min": 3.819,
+    "RMSE@30min": 7.275
   },
   "baseline_historical_average": {
-    "MAE@5min": 4.514,
-    "RMSE@5min": 10.233,
-    "MAE@15min": 4.512,
-    "RMSE@15min": 10.231,
-    "MAE@30min": 4.51,
-    "RMSE@30min": 10.229
+    "MAE@5min": 3.997,
+    "RMSE@5min": 8.42,
+    "MAE@15min": 3.997,
+    "RMSE@15min": 8.419,
+    "MAE@30min": 3.996,
+    "RMSE@30min": 8.422
   },
   "anomaly_detection": {
-    "count": 2388,
-    "rate": 0.01339,
+    "count": 6713,
+    "rate": 0.01474,
     "note": "殘差 z>3 之 (時間窗, 路段)；precision/recall 需事件標記（未來以 TDX 事故資料對齊）"
   }
 }

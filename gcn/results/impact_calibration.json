@@ -1,0 +1,41 @@
+{
+  "n_accidents_measured": 164,
+  "n_skipped": 5,
+  "median_speed_ratio_by_hop": [
+    1.283,
+    1.061,
+    1.025,
+    1.019,
+    1.016
+  ],
+  "p75_speed_ratio_by_hop": [
+    2.065,
+    1.634,
+    1.08,
+    1.066,
+    1.054
+  ],
+  "queue_extent_km": {
+    "median": 2.15,
+    "p75": 6.43
+  },
+  "recovery_minutes": {
+    "median": 25.0,
+    "n_recovered": 151
+  },
+  "calibration": {
+    "current": {
+      "severity": 0.8,
+      "radius_km": 0.8,
+      "implied_speed_ratio": 1.44
+    },
+    "empirical": {
+      "median_speed_ratio": 1.283,
+      "implied_severity_median": 0.713,
+      "implied_severity_p75": 1.147,
+      "freeway_queue_km_median": 2.15,
+      "freeway_queue_km_p75": 6.43
+    }
+  },
+  "note": "隱含 severity = ratio/INCIDENT_MULT(1.8)；extent 以 ratio>=1.15 的連續上游路段累計"
+}

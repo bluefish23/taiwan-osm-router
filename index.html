@@ -164,6 +164,17 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14
 .legend b{color:var(--text)}
 
 /* Loading */
+/* 事件通知 toast */
+.toast-stack{position:fixed;top:62px;left:50%;transform:translateX(-50%);z-index:850;
+  display:flex;flex-direction:column;gap:8px;pointer-events:none;max-width:min(420px,90vw)}
+.toast{background:rgba(10,20,38,.95);border:1px solid rgba(255,255,255,.15);border-left:4px solid #ffb400;
+  color:#eee;padding:10px 14px;border-radius:10px;font-size:13px;line-height:1.5;
+  box-shadow:0 4px 18px rgba(0,0,0,.45);pointer-events:auto;cursor:pointer;
+  animation:toastIn .3s ease;transition:opacity .4s,transform .4s}
+.toast.pred{border-left-color:#b388ff}
+.toast.hide{opacity:0;transform:translateY(-8px)}
+.toast b{color:#fff}
+@keyframes toastIn{from{opacity:0;transform:translateY(-12px)}to{opacity:1;transform:none}}
 #loader{display:none;position:fixed;inset:0;background:rgba(6,13,26,.75);z-index:999;
   align-items:center;justify-content:center;flex-direction:column;gap:14px}
 #loader.show{display:flex}
@@ -234,6 +245,7 @@ body.driving .drive-hud{display:block}
 
 <div id="loader"><div class="spin"></div><div class="ltxt" id="ltxt">路線計算中...</div></div>
 <div id="map"></div>
+<div class="toast-stack" id="toastStack"></div>
 
 <!-- Route Panel -->
 <div class="route-panel">
@@ -268,7 +280,7 @@ body.driving .drive-hud{display:block}
 
   <div class="rp-footer">
     <span style="font-size:10px;color:var(--muted)">點地圖設定起終點</span>
-    <a href="/admin">⚙ 管理</a>
+    <span><a href="/predict/demo" target="_blank">📊 預測驗證</a>　<a href="/admin">⚙ 管理</a></span>
   </div>
 </div>
 
@@ -289,6 +301,11 @@ body.driving .drive-hud{display:block}
     <div class="ld-dot" style="background:#4a9eff"></div>
     <div class="ld-label">天氣影響</div>
     <div class="ld-count" id="olWx">—</div>
+  </div>
+  <div class="ld-item on" onclick="toggleLayer('prediction')">
+    <div class="ld-dot" style="background:#b388ff"></div>
+    <div class="ld-label">🔮 預測壅塞</div>
+    <div class="ld-count" id="olPred">—</div>
   </div>
 </div>
 
@@ -913,8 +930,8 @@ map.on('dragstart',()=>{
 });
 
 // Layers
-const overlayState={congestion:true,events:true,weather:true};
-const overlayGroups={congestion:L.layerGroup().addTo(map),events:L.layerGroup().addTo(map),weather:L.layerGroup().addTo(map)};
+const overlayState={congestion:true,events:true,weather:true,prediction:true};
+const overlayGroups={congestion:L.layerGroup().addTo(map),events:L.layerGroup().addTo(map),weather:L.layerGroup().addTo(map),prediction:L.layerGroup().addTo(map)};
 
 function toggleLayerPanel(){document.getElementById('layerDrop').classList.toggle('show');}
 function toggleLayer(name){
@@ -928,9 +945,46 @@ function sevColor(sev){
 }
 const evtColors={accident:'#ff4444',construction:'#ffb400',closure:'#cc0000',congestion:'#ff6600',manual:'#a78bfa'};
 
+// ── 新事件通知 ──────────────────────────────────────────
+let knownEventIds=null;   // null = 首次載入（只記錄不通知）
+const EVT_ICON={accident:'🚗💥',construction:'🚧',closure:'⛔',congestion:'🐢',manual:'📍'};
+function showToast(html,cls='',ms=9000,onClick=null){
+  const stack=document.getElementById('toastStack');
+  const t=document.createElement('div');t.className=`toast ${cls}`;t.innerHTML=html;
+  t.onclick=()=>{if(onClick)onClick();dismiss();};stack.appendChild(t);
+  let gone=false;
+  function dismiss(){if(gone)return;gone=true;t.classList.add('hide');setTimeout(()=>t.remove(),450);}
+  setTimeout(dismiss,ms);
+}
+async function placeName(lat,lon){
+  try{const r=await call(`/revgeocode?lat=${lat}&lon=${lon}`);return r.name||'';}catch(e){return'';}
+}
+async function notifyNewEvents(events){
+  const ids=new Set(events.map(e=>e.event_id||e.id||`${e.lat},${e.lon},${e.event_type}`));
+  if(knownEventIds===null){knownEventIds=ids;return;}
+  const fresh=events.filter(e=>!knownEventIds.has(e.event_id||e.id||`${e.lat},${e.lon},${e.event_type}`));
+  knownEventIds=ids;
+  if(!fresh.length)return;
+  const preds=fresh.filter(e=>e.source==='prediction');
+  const others=fresh.filter(e=>e.source!=='prediction');
+  if(preds.length)   // 預測批次（一次 26 個）合併成一則
+    showToast(`<b>🔮 預測更新</b>：新增 ${preds.length} 個預測壅塞路段，路線將自動反映`,'pred');
+  for(const ev of others.slice(0,3)){
+    const sev=+ev.severity||0.5,lat=+ev.lat,lon=+ev.lon;
+    const loc=await placeName(lat,lon);          // 反向地理編碼取地點名
+    const locLine=loc?`📍 ${loc}`:`📍 ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+    showToast(`<b>${EVT_ICON[ev.event_type]||'⚠️'} 新事件：${ev.event_type}</b><br>`+
+      `${locLine}<br>${(ev.description||'').slice(0,60)}<br>`+
+      `嚴重度 ${sev.toFixed(2)}<span style="color:#8ab4ff">　· 點擊查看位置</span>`,
+      '',12000,()=>map.setView([lat,lon],14));
+  }
+  if(others.length>3)showToast(`⚠️ 另有 ${others.length-3} 個新事件，見地圖圖層`);
+}
+
 async function loadOverlays(){
   try{
     const[events,weather]=await Promise.all([call('/events'),call('/weather')]);
+    notifyNewEvents(events);
 
     if(driving&&latestRoute&&gpsCoord&&!rerouting){
       const evHash=JSON.stringify(events.map(e=>e.id||`${e.lat},${e.lon}`).sort());
@@ -950,16 +1004,20 @@ async function loadOverlays(){
       lastEventHash=evHash;
     }
 
-    overlayGroups.congestion.clearLayers();overlayGroups.events.clearLayers();overlayGroups.weather.clearLayers();
-    let cC=0,cE=0;
+    overlayGroups.congestion.clearLayers();overlayGroups.events.clearLayers();overlayGroups.weather.clearLayers();overlayGroups.prediction.clearLayers();
+    let cC=0,cE=0,cP=0;
     for(const ev of events){
       const lat=+ev.lat,lon=+ev.lon,sev=+ev.severity||0.5,rad=(+ev.radius_km||0.5)*1000;
       if(!lat||!lon)continue;
       if(ev.source==='prediction'){
-        // GCN 預測壅塞（新增圖層分支，不影響原本 realtime/manual 事件邏輯）
-        cE++;
-        L.circle([lat,lon],{radius:rad,fillColor:'#b388ff',color:'#7c4dff',weight:2,dashArray:'6 4',fillOpacity:.18,opacity:.7})
-          .bindPopup(`🔮 ${ev.description||'預測壅塞'} sev=${sev.toFixed(2)}`).addTo(overlayGroups.events);
+        // GCN 預測壅塞：獨立圖層 + 雙圈視覺（外虛線圈 + 內實心核），嚴重度越高越不透明
+        cP++;
+        const op=Math.min(.45,.15+sev*.3);
+        L.circle([lat,lon],{radius:rad,fillColor:'#b388ff',color:'#7c4dff',weight:2.5,dashArray:'6 4',fillOpacity:op,opacity:.85})
+          .addTo(overlayGroups.prediction);
+        L.circleMarker([lat,lon],{radius:5,fillColor:'#7c4dff',color:'#fff',weight:1.5,fillOpacity:.95})
+          .bindPopup(`<b>🔮 GCN 預測壅塞</b><br>${ev.description||''}<br>嚴重度 ${sev.toFixed(2)}（T-GCN 30 分鐘預測）<br><span style="color:#888;font-size:11px">路線已自動反映此預測</span>`)
+          .addTo(overlayGroups.prediction);
       }else if(ev.event_type==='congestion'&&ev.source==='realtime'){
         cC++;
         L.circleMarker([lat,lon],{radius:4,fillColor:sevColor(sev),color:'rgba(0,0,0,.3)',weight:1,fillOpacity:.8})
@@ -982,6 +1040,7 @@ async function loadOverlays(){
     document.getElementById('olCong').textContent=cC;
     document.getElementById('olEvt').textContent=cE;
     document.getElementById('olWx').textContent=cW;
+    document.getElementById('olPred').textContent=cP;
   }catch(e){}
 }
 
@@ -994,7 +1053,7 @@ document.addEventListener('click',e=>{
 setupSearch('inputStart','sugStart',(lat,lon,label)=>setStart(lat,lon,label));
 setupSearch('inputEnd','sugEnd',(lat,lon,label)=>setEnd(lat,lon,label));
 ping();initGps();loadOverlays();
-setInterval(ping,30000);setInterval(loadOverlays,60000);
+setInterval(ping,30000);setInterval(loadOverlays,15000);   // 15s：新事件通知即時性
 </script>
 </body>
 </html>

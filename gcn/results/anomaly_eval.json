@@ -1,0 +1,83 @@
+{
+  "config": {
+    "tol_before": 10,
+    "tol_after": 30,
+    "upstream": 2
+  },
+  "test_period": [
+    "2026-05-26T19:10:00.000000000",
+    "2026-05-30T23:30:00.000000000"
+  ],
+  "accidents_total": 169,
+  "accidents_in_test": 127,
+  "accidents_matched": 123,
+  "accidents_unmatched": 4,
+  "truth_coverage": 0.02325,
+  "note": "point_precision=標記點命中率（隨機基準=truth_coverage）；event_recall=事故被偵測比例",
+  "curve": [
+    {
+      "threshold": 1.0,
+      "flagged": 16244,
+      "point_precision": 0.0468,
+      "event_recall": 0.9756,
+      "f1": 0.0894,
+      "detected_events": 120
+    },
+    {
+      "threshold": 1.5,
+      "flagged": 7291,
+      "point_precision": 0.0661,
+      "event_recall": 0.8943,
+      "f1": 0.1231,
+      "detected_events": 110
+    },
+    {
+      "threshold": 2.0,
+      "flagged": 3791,
+      "point_precision": 0.0841,
+      "event_recall": 0.7398,
+      "f1": 0.1511,
+      "detected_events": 91
+    },
+    {
+      "threshold": 2.5,
+      "flagged": 2272,
+      "point_precision": 0.1109,
+      "event_recall": 0.6748,
+      "f1": 0.1905,
+      "detected_events": 83
+    },
+    {
+      "threshold": 3.0,
+      "flagged": 1465,
+      "point_precision": 0.1331,
+      "event_recall": 0.6098,
+      "f1": 0.2185,
+      "detected_events": 75
+    },
+    {
+      "threshold": 3.5,
+      "flagged": 1022,
+      "point_precision": 0.1536,
+      "event_recall": 0.5528,
+      "f1": 0.2404,
+      "detected_events": 68
+    },
+    {
+      "threshold": 4.0,
+      "flagged": 713,
+      "point_precision": 0.1571,
+      "event_recall": 0.439,
+      "f1": 0.2314,
+      "detected_events": 54
+    }
+  ],
+  "best_by_f1": {
+    "threshold": 3.5,
+    "flagged": 1022,
+    "point_precision": 0.1536,
+    "event_recall": 0.5528,
+    "f1": 0.2404,
+    "detected_events": 68
+  }
+}

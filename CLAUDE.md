@@ -29,6 +29,10 @@
 |------|------|
 | `build_osm_graph.py` | OSM PBF → SQLite 路網建置工具（離線執行一次） |
 | `osm_router.py` | A* 路徑搜尋引擎 + 動態成本計算核心 |
+| `osm_partition.py` | 路口收縮圖（`PartitionedRouter`，繼承 OSMRouter）；`PARTITION_MODE=1` 時啟用 |
+| `verify_routes.py` | 路線回歸比對（50 組固定取樣，改動前存基準、改完比對） |
+| `measure_routes.py` | 路徑搜尋成本量測（單條 vs 含備選） |
+| `analyze_complexity.py` | 演算法時間複雜度量測（唯讀，不需伺服器） |
 | `osm_api.py` | FastAPI REST API 伺服器（13 個端點） |
 | `realtime_sync.py` | TDX/CWA 背景同步引擎（TDXClient + CWAClient + RealtimeSyncer） |
 | `index.html` | Leaflet 地圖前端 UI（單檔 SPA） |
@@ -79,6 +83,42 @@ uvicorn osm_api:app --host 127.0.0.1 --port 8000
 - **時段速度**：尖峰 (7-9, 17-19) motorway ×0.85, primary ×0.70, tertiary ×0.62；離峰 ×1.0
 - **道路速度**：motorway=110, trunk=90, primary=60, secondary=50, tertiary=40, residential=30 km/h
 - **重要**：道路類別本身沒有 risk 差異，risk 來自動態事件、天氣和時段
+
+### osm_partition.py — 路口收縮圖（`PARTITION_MODE=1`）
+
+問題：A* 跑在「平均每邊 34 公尺」的圖上，而 **95.7% 的節點只是描繪彎道的形狀點，
+不是路口**，搜尋每前進 34 公尺就付一次堆積操作。
+
+作法：把「無向度數 ≠ 2」的節點當路口，兩路口之間的形狀點鏈收成一條 **link**，
+A* 改跑 link 圖。`PartitionedRouter` 繼承 `OSMRouter`，只覆寫
+`_route_inner` / `apply_event_incremental` / `recompute_dynamic_cost`；
+**未建 link 圖、端點不在圖中、展開失敗時全部退回父類別**。
+
+| 指標 | 實測（主幹路網） |
+|---|---|
+| 節點 | 793,898 → **35,668**（22.3×） |
+| 有向邊 | 1,344,026 → **77,725 link**（17.3×） |
+| 50 條路線總耗時 | 185.3s → **13.7s（−92.6%）** |
+| 台北→高雄 | 2.62s → **0.135s** |
+
+**已驗證的性質**（勿在重構時弄丟）：
+
+1. **成本聚合與逐邊加總完全相等**（實測誤差 1.8×10⁻¹³）。關鍵是
+   `Link.by_hw` 存 `(highway, Σcost, Σ(cost×risk))` **兩個**累加量——因為原式
+   `(cost/tsf)×(1+(risk+night)×w_risk)` 只有拆成
+   `cost/tsf×(1+night×w_risk) + (cost×risk)/tsf×w_risk` 才可依 highway 分組聚合。
+2. **同一張路網下路線逐段相同**（16 條測試邊序列完全一致）。
+   內部轉彎與號誌在建圖時就折進 link，跨路口的轉彎在搜尋時補算。
+3. **事件反應與原圖 A* 一致**（同一事件下距離、時間完全相同）。
+   `apply_event_incremental` 後必須呼叫 `_refresh_links` 同步 link 聚合，
+   否則 A* 讀的是舊值、事件等於沒生效。
+4. **Link 必須存 `edge_ids` 而非 Edge 物件**——Edge 是 namedtuple，
+   事件套用時以 `_replace` 產生新物件寫回 `_graph`，存參照會拿到過期成本。
+
+**已知取捨**：切割模式不使用端點局部圖（link 圖在載入後建好，局部圖是路由時
+才動態併入），50 條路線中 10 條因此長 2~8%。已證實 100% 來自此因素，非搜尋誤差。
+附註：原系統的局部圖本身就不是穩定基準——`_local_cells` 跨請求累積，
+同一條路線在乾淨環境與跑過 47 條之後的結果並不相同。
 
 ### realtime_sync.py — 即時同步引擎
 
@@ -153,7 +193,8 @@ uvicorn osm_api:app --host 127.0.0.1 --port 8000
 | `CWB_API_KEY` | CWA 氣象署 API Key | — |
 | `DB_PATH` | SQLite 路徑 | `taiwan_osm.db` |
 | `AUTO_SYNC_INTERVAL` | 同步間隔秒數，0=停用 | `300` |
-| `PRELOAD_ALL_ROADS` | 1=全路網載入記憶體（765 萬邊，啟動 ~100s、RAM ~6.2GB，路由零 DB 查詢、無首查尖峰；重複查詢略慢於快取模式因搜尋分支較多）。0=主幹預載+端點局部圖網格快取（預設） | `0` |
+| `PRELOAD_ALL_ROADS` | 1=全路網載入記憶體（765 萬邊，啟動 ~100s、RAM ~6.2GB，路由零 DB 查詢、無首查尖峰）。**長程路線在此模式下常撞 A\* 200 萬步上限而失敗**（實測 50 條路線失敗 10 條，含台北→高雄）。0=主幹預載+端點局部圖網格快取（預設，50 條全數成功且總耗時只有一半） | `0` |
+| `PARTITION_MODE` | 1=啟用路口收縮圖（見下節）。**必須搭配 `PRELOAD_ALL_ROADS=0`**，設 1 時會自動停用並印警告 | `0` |
 
 ## 開發注意事項
 

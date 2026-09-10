@@ -12,3 +12,7 @@ vstips.txt
 # GCN 專題
 .venv/
 gcn/data/
+
+# 路線回歸比對的基準檔（verify_routes.py 產生，可重跑，且綁定當下的圖與 DB 狀態）
+route_*.json
+_stage2_base.json

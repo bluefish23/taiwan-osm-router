@@ -128,6 +128,32 @@ def _time_speed_factor(highway: str) -> float:
             return m
     return 1.0
 
+
+def _time_speed_map() -> Tuple[Dict[str, float], float]:
+    """一次算好所有道路類型的時段係數，回傳 (查表用 dict, 未知類型的預設值)。
+
+    _time_speed_factor 每次呼叫都會取一次系統時間（datetime.now），而它原本
+    被放在 A* 的邊鬆弛迴圈內（每條被檢視的邊各一次）。時段係數在單次搜尋
+    期間是常數，因此提到迴圈外算一次即可。
+
+    這同時修掉一個正確性問題：長程搜尋可達十餘秒，有機會跨過整點；
+    若係數在搜尋途中改變，邊成本就會前後不一致，破壞 A* 啟發式的一致性前提。
+    提到迴圈外之後，單次搜尋內的成本恆定。
+
+    與 _time_speed_factor 逐項等價（同一個 h、同一張表、同樣的區間掃描）。
+    """
+    h = _tw_hour()
+
+    def pick(table: dict) -> float:
+        for (lo, hi), m in table.items():
+            if lo <= h < hi:
+                return m
+        return 1.0
+
+    return ({hw: pick(TIME_SPEED_MULT.get(hw, _DEFAULT_TIME_MULT))
+             for hw in VALID_HIGHWAYS},
+            pick(_DEFAULT_TIME_MULT))
+
 TURN_PENALTY_MIN = {
     "straight": 0.0, "slight": 0.05, "turn": 0.17, "sharp": 0.25, "uturn": 0.42,
 }
@@ -193,6 +219,7 @@ class OSMRouter:
         self._local_cells: set = set()   # 已合併局部圖的網格快取
         self._all_roads_loaded = False   # True=全路網已在記憶體，路由免查 DB
         self._graph_lock = threading.RLock()
+        self._last_search_iters = 0      # 上一次 _route_inner 實際展開的次數
 
     def init_dynamic_schema(self):
         with _conn(self.db_path) as conn:
@@ -424,19 +451,30 @@ class OSMRouter:
         try:
             results = []
             penalty_edges: set = set()
+            # 第一次搜尋給完整預算；之後的備選以它的 2 倍為上限（且不超過
+            # 原本的安全閥，見 _route_inner 的 hard_cap）。
+            #
+            # 用意是：第一次很便宜、但備選卻陷進難解區域時，及早收手。
+            # 實測註記：對台北→嘉義這類「備選本來就需要接近上限次展開」的長程，
+            # 此限制不會生效（2×first 已超過 hard_cap），耗時與原本相同——
+            # 先前把該情形判讀為「注定失敗的浪費」並不正確，那是上限略低所致。
+            budget: Optional[int] = None
             for i in range(n):
                 try:
-                    r = self._route_inner(start_node, end_node, mode, penalty_edges)
+                    r = self._route_inner(start_node, end_node, mode, penalty_edges, budget)
                     results.append(r)
                     for e in r.edges:
                         penalty_edges.add(e["edge_id"])
+                    if budget is None:
+                        budget = max(2 * self._last_search_iters, 50_000)
                 except ValueError:
                     break
             return results
         finally:
             self._graph_lock.release()
 
-    def _route_inner(self, start_node, end_node, mode="balanced", penalty_edges: set = None) -> RouteResult:
+    def _route_inner(self, start_node, end_node, mode="balanced", penalty_edges: set = None,
+                     budget_iters: Optional[int] = None) -> RouteResult:
         if not self._graph_loaded:
             raise RuntimeError("請先呼叫 load_graph()")
         graph = self._graph
@@ -484,6 +522,9 @@ class OSMRouter:
         w = MODE_WEIGHTS.get(mode, MODE_WEIGHTS["balanced"])
         night_r = _night_risk_score()
         sig_nodes = self._signal_nodes
+        # 時段係數在單次搜尋期間為常數，一次算好；原本放在邊鬆弛迴圈內，
+        # 每條邊都會多付一次 datetime.now()。詳見 _time_speed_map 的說明。
+        tsf_map, tsf_dflt = _time_speed_map()
 
         def h(nid):
             la, lo = self._ncoords.get(nid, (e_la, e_lo))
@@ -492,12 +533,16 @@ class OSMRouter:
         heap = [(h(start_node), next(_CTR), start_node, 0.0)]
         best = {start_node: 0.0}
         came_from: dict = {}
-        max_iters = min(len(graph) * 3, 2_000_000)
+        # budget_iters 只能「收緊」上限，不能放寬——否則備選搜尋會取得比
+        # 原本安全閥更大的額度（實測台北→嘉義因此從 30.1s 變成 41.8s）。
+        hard_cap = min(len(graph) * 3, 2_000_000)
+        max_iters = min(budget_iters, hard_cap) if budget_iters else hard_cap
         iters = 0
 
         while heap:
             iters += 1
             if iters > max_iters:
+                self._last_search_iters = iters
                 raise ValueError(f"路徑搜尋超時（{iters} 步），請縮短距離或改用不同模式。")
             f, _, node, g = heapq.heappop(heap)
             if node == end_node:
@@ -506,7 +551,7 @@ class OSMRouter:
                 cur = end_node
                 while cur in came_from:
                     prev, e = came_from[cur]
-                    tsf = _time_speed_factor(e.hw)
+                    tsf = tsf_map.get(e.hw, tsf_dflt)
                     seg_min = e.cost / tsf   # 含事件速度乘數（與搜尋成本一致）
                     edges.append({
                         "edge_id": e.eid, "highway": e.hw, "name": e.name,
@@ -521,6 +566,7 @@ class OSMRouter:
                     cur = prev
                 edges.reverse()
                 nodes = [start_node] + [ed["to_node"] for ed in edges]
+                self._last_search_iters = iters
                 return RouteResult(nodes, edges, tot_km, tot_min, g, mode)
             if g > best.get(node, float("inf")):
                 continue
@@ -533,7 +579,7 @@ class OSMRouter:
 
             for e in graph.get(node, []):
                 nxt = e.to
-                tsf = _time_speed_factor(e.hw)
+                tsf = tsf_map.get(e.hw, tsf_dflt)
                 # e.cost 已含事件速度乘數（dynamic_mult 折進時間，見
                 # _apply_dynamic_to_graph）；除以時段係數得當下有效時間。
                 # 中性狀態 e.cost=(dist/spd)*60，與舊公式完全等價。
@@ -563,6 +609,7 @@ class OSMRouter:
                 self._ncoords.setdefault(nxt, (e.lb, e.lob))
                 heapq.heappush(heap, (ng + h(nxt), next(_CTR), nxt, ng))
 
+        self._last_search_iters = iters
         raise ValueError(f"找不到路徑（{start_node}→{end_node}，直線{direct_km:.1f}km）。"
                          "請確認座標在台灣道路範圍內。")
 

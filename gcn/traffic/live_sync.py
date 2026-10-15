@@ -139,19 +139,28 @@ def build_live_window(sections, n_steps: int):
     return speed, volume, stamps, got
 
 
-def run_live_prediction(db_path: str, horizon_pick: int = -1) -> dict:
-    """抓即時資料 → 預測 → 寫入 predicted_congestion 事件。回傳摘要（含 event_ids）。"""
+def predict_live(horizon_pick: int = -1) -> dict:
+    """抓即時資料 → 預測（不寫資料庫）。下載需數秒到數十秒，呼叫端不該為此持鎖。"""
     p = _predictor()
-    ff = _freeflow_baseline()
     speed, volume, stamps, got = build_live_window(p.sections, p.in_steps)
     if got == 0:
         raise RuntimeError("無法取得任何即時 ETag 資料（來源延遲或網路問題）")
-    pred = p.predict(speed, volume)[:, horizon_pick]
-    horizon_min = p.horizons[horizon_pick] * 5
-    result = write_congestion_events(db_path, pred, ff, np.array(p.sections), horizon_min)
-    result.update(mode="live", window=[stamps[0], stamps[-1]],
-                  fetched_steps=f"{got}/{p.in_steps}")
+    return {"pred": p.predict(speed, volume)[:, horizon_pick], "sections": np.array(p.sections),
+            "horizon_min": p.horizons[horizon_pick] * 5, "window": [stamps[0], stamps[-1]],
+            "fetched_steps": f"{got}/{p.in_steps}"}
+
+
+def write_live_prediction(db_path: str, live: dict) -> dict:
+    """把 predict_live 的結果寫成 predicted_congestion 事件。回傳摘要（含 event_ids）。"""
+    result = write_congestion_events(db_path, live["pred"], _freeflow_baseline(),
+                                     live["sections"], live["horizon_min"])
+    result.update(mode="live", window=live["window"], fetched_steps=live["fetched_steps"])
     return result
+
+
+def run_live_prediction(db_path: str, horizon_pick: int = -1) -> dict:
+    """抓即時資料 → 預測 → 寫入 predicted_congestion 事件。回傳摘要（含 event_ids）。"""
+    return write_live_prediction(db_path, predict_live(horizon_pick))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,38 @@
+{
+  "mode": "system",
+  "closures": false,
+  "rows": [
+    {
+      "events": 0,
+      "full_recompute_s": 2.58,
+      "incremental_ms_median": 33.6,
+      "incremental_ms_max": 73.4,
+      "route_s_median": 0.071,
+      "route_km": 162.77
+    },
+    {
+      "events": 5000,
+      "full_recompute_s": 72.22,
+      "incremental_ms_median": 33.0,
+      "incremental_ms_max": 157.0,
+      "route_s_median": 0.083,
+      "route_km": 176.82
+    },
+    {
+      "events": 10000,
+      "full_recompute_s": 145.16,
+      "incremental_ms_median": 36.0,
+      "incremental_ms_max": 228.2,
+      "route_s_median": 0.085,
+      "route_km": 165.9
+    },
+    {
+      "events": 20000,
+      "full_recompute_s": 287.09,
+      "incremental_ms_median": 31.3,
+      "incremental_ms_max": 283.7,
+      "route_s_median": 0.133,
+      "route_km": 164.71
+    }
+  ]
+}

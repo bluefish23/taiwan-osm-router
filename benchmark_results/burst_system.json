@@ -1,0 +1,54 @@
+{
+  "mode": "system",
+  "route_baseline_s": 0.092,
+  "round1": {
+    "events": 100,
+    "threads": 16,
+    "wall_s": 23.4,
+    "events_per_s": 4.3,
+    "apply_ms_median": 3750.3,
+    "apply_ms_p95": 4862.1,
+    "apply_ms_max": 5264.4,
+    "errors": [],
+    "error_count": 0,
+    "route_queries": 183,
+    "route_s_median": 0.094,
+    "route_s_max": 0.925,
+    "route_errors": [],
+    "recompute_during_s": null,
+    "db_active_events": 100,
+    "consistency": {
+      "edges_compared": 41933,
+      "edges_differ": 0,
+      "max_cost_diff": 0.0,
+      "max_risk_diff": 0.0,
+      "links_inconsistent": 0,
+      "recompute_s": 4.9
+    }
+  },
+  "round2": {
+    "events": 100,
+    "threads": 16,
+    "wall_s": 31.9,
+    "events_per_s": 3.1,
+    "apply_ms_median": 4366.2,
+    "apply_ms_p95": 8943.7,
+    "apply_ms_max": 9735.3,
+    "errors": [],
+    "error_count": 0,
+    "route_queries": 209,
+    "route_s_median": 0.106,
+    "route_s_max": 2.72,
+    "route_errors": [],
+    "recompute_during_s": 7.1,
+    "db_active_events": 200,
+    "consistency": {
+      "edges_compared": 81898,
+      "edges_differ": 2781,
+      "max_cost_diff": 0.012355860000000003,
+      "max_risk_diff": 6.400000000000002,
+      "links_inconsistent": 0,
+      "recompute_s": 6.5
+    }
+  }
+}

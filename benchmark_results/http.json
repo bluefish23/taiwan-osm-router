@@ -1,0 +1,29 @@
+{
+  "events": 1000,
+  "workers": 64,
+  "wall_s": 233.1,
+  "events_per_s": 4.3,
+  "status": {
+    "200": 1000
+  },
+  "errors": [],
+  "error_count": 0,
+  "post_ms_median": 8130.3,
+  "post_ms_p95": 16814.8,
+  "post_ms_max": 104989.3,
+  "route_baseline_s": 0.2,
+  "route_during_median_s": 0.993,
+  "route_during_max_s": 8.613,
+  "route_errors": [],
+  "events_listed": 1000,
+  "route_after_burst": [
+    162.8298,
+    125.94
+  ],
+  "route_after_recompute": [
+    162.8298,
+    125.94
+  ],
+  "server_tracebacks": 0,
+  "server_db_locked": 0
+}

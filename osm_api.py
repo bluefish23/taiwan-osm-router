@@ -10,7 +10,7 @@ import logging
 import os
 import threading
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
@@ -66,6 +66,11 @@ async def lifespan(app):
             _router.build_link_graph(verbose=True)
         if use_propagation:
             use_propagation = _router.build_propagation_index(verbose=True)
+        # 增量套用只改記憶體，資料庫的路段成本停在上一次全量重算；啟動時重算一次，
+        # 生效中的事件才會套用、已刪除的事件才會還原（否則重啟後兩者都與事件表不符）
+        t0 = time.perf_counter()
+        _router.recompute_dynamic_cost()
+        print(f"[startup] 依生效中的事件重算路網成本（{time.perf_counter() - t0:.1f}s）")
 
         print("[startup] TDX/CWA sync disabled (demo mode — manual events only)")
 
@@ -91,6 +96,7 @@ app.add_middleware(CORSMiddleware,allow_origins=_ALLOWED_ORIGINS,allow_credentia
                    allow_methods=["GET","POST","DELETE"],allow_headers=["Content-Type","Authorization"])
 
 _STATIC_DIR = Path(__file__).parent
+_NO_CACHE = {"Cache-Control": "no-cache"}   # 頁面每次向伺服器確認，更新後不會看到舊版
 _TGOS_KEY = os.getenv("TGOS_API_KEY", "")
 _ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
 _geocode_cache: dict[str, tuple[float, list]] = {}
@@ -112,11 +118,11 @@ def require_admin(request: Request):
 
 @app.get("/app", response_class=FileResponse)
 def serve_user():
-    return FileResponse(_STATIC_DIR / "index.html", media_type="text/html")
+    return FileResponse(_STATIC_DIR / "index.html", media_type="text/html", headers=_NO_CACHE)
 
 @app.get("/admin", response_class=FileResponse)
 def serve_admin(_=Depends(require_admin)):
-    return FileResponse(_STATIC_DIR / "admin.html", media_type="text/html")
+    return FileResponse(_STATIC_DIR / "admin.html", media_type="text/html", headers=_NO_CACHE)
 
 @app.get("/revgeocode")
 async def revgeocode(lat: float = Query(...), lon: float = Query(...)):
@@ -250,7 +256,7 @@ def chk(lat,lon,name=""):
 def root():
     html = Path(__file__).parent / "index.html"
     if html.exists():
-        return FileResponse(html, media_type="text/html")
+        return FileResponse(html, media_type="text/html", headers=_NO_CACHE)
     return {"service":"Taiwan OSM Dynamic Router","version":"3.0.0",
             "graph_loaded":_router is not None and _router._graph_loaded,
             "sync_enabled": _syncer is not None}
@@ -292,27 +298,53 @@ def nearest(lat:float,lon:float):
 @app.get("/events")
 def list_events(): return get_r().list_events()
 
+# 「寫入事件＋增量套用」與「全量重算」必須互斥：重算若剛好插在兩步之間，
+# 重算已把事件算進去，接著增量套用又加一次——事件風險是累加的，就被算兩次
+# （實測：大量事件湧入時途中觸發重算，2,781 條路段風險多加 6.4）。
+# 切割模式沿用路由器自己的互斥鎖（它的重算也用同一把）；原始模式用這把。
+_event_lock = threading.RLock()
+# 路網成本版本：每次持鎖改動成本（新增事件、重算、預測）完成時 +1。
+# 前端據此判斷「成本已更新完」再重新規劃路線，不會在寫入事件與套用之間查到舊路線。
+_cost_version = 0
+
+@contextmanager
+def _events_guard():
+    global _cost_version
+    with getattr(get_r(), "_event_mutex", _event_lock):
+        try:
+            yield
+        finally:
+            _cost_version += 1
+
 @app.post("/events")
 def add_event(req:EventReq, _=Depends(require_admin)):
     chk(req.lat,req.lon,"事件")
-    eid=get_r().add_event(req.event_type,lat=req.lat,lon=req.lon,
-                           description=req.description)
-    result=get_r().apply_event_incremental(eid)
+    with _events_guard():
+        eid=get_r().add_event(req.event_type,lat=req.lat,lon=req.lon,
+                               description=req.description)
+        result=get_r().apply_event_incremental(eid)
     return {"ok":True,"event_id":eid,"incremental":result,
             "note":"已即時套用（增量預測更新）"}
 
 @app.post("/events/apply/{event_id}")
 def apply_single_event(event_id:str, _=Depends(require_admin)):
-    result=get_r().apply_event_incremental(event_id)
+    with _events_guard():
+        result=get_r().apply_event_incremental(event_id)
     return {"ok":True,**result}
 
+# 增量套用無法反向扣除（乘數取最大值、風險累加），刪除事件後要整張重算，
+# 被刪事件改過的路段才會恢復；在背景執行，數秒後生效（成本版本 +1，前端隨之重新規劃）
 @app.delete("/events/{event_id}")
 def del_event(event_id:str, _=Depends(require_admin)):
-    get_r().remove_event(event_id); return {"ok":True,"deleted":event_id}
+    get_r().remove_event(event_id)
+    _schedule_recompute("balanced")
+    return {"ok":True,"deleted":event_id,"note":"已開始背景重算，數秒後生效"}
 
 @app.delete("/events")
 def clear_events(_=Depends(require_admin)):
-    get_r().clear_events(); return {"ok":True}
+    get_r().clear_events()
+    _schedule_recompute("balanced")
+    return {"ok":True,"note":"已開始背景重算，數秒後生效"}
 
 @app.get("/weather")
 def list_weather():
@@ -333,39 +365,62 @@ def add_weather(req:WeatherReq, _=Depends(require_admin)):
     return {"ok":True,"weather_id":wid,"severity":s,"radius_km":req.radius_km,
             "note":"請呼叫 /dynamic/recompute 套用"}
 
+_recompute_flag_lock = threading.Lock()
+
 def _do_recompute(mode: str):
-    try:
-        get_r().recompute_dynamic_cost(mode=mode)
-        _recompute_status.update(running=False, last_ok=time.time(), last_error=None)
-        _log.info("recompute done (mode=%s)", mode)
-    except Exception as e:
-        _recompute_status.update(running=False, last_error=str(e))
-        _log.exception("recompute failed")
+    """背景全量重算；執行期間又有人要求重算時，跑完再補跑一次（確保最新的刪除也算進去）。"""
+    while True:
+        try:
+            with _events_guard():
+                get_r().recompute_dynamic_cost(mode=mode)
+            _recompute_status.update(last_ok=time.time(), last_error=None)
+            _log.info("recompute done (mode=%s)", mode)
+        except Exception as e:
+            _recompute_status.update(last_error=str(e))
+            _log.exception("recompute failed")
+        with _recompute_flag_lock:
+            if not _recompute_status.get("again"):
+                _recompute_status["running"] = False
+                return
+            _recompute_status["again"] = False
+
+def _schedule_recompute(mode: str) -> bool:
+    """排一次背景重算；已在執行中則標記補跑。回傳是否新開了一次。"""
+    with _recompute_flag_lock:
+        if _recompute_status["running"]:
+            _recompute_status["again"] = True
+            return False
+        _recompute_status.update(running=True, again=False, last_error=None)
+    threading.Thread(target=_do_recompute, args=(mode,), daemon=True).start()
+    return True
 
 @app.post("/dynamic/recompute")
 def recompute(req:RecomputeReq, _=Depends(require_admin)):
-    if _recompute_status["running"]:
-        return {"ok":True,"message":"重算已在執行中，請稍候"}
-    _recompute_status["running"] = True
-    _recompute_status["last_error"] = None
-    threading.Thread(target=_do_recompute, args=(req.mode,), daemon=True).start()
+    if not _schedule_recompute(req.mode):
+        return {"ok":True,"message":"重算已在執行中，完成後會再算一次"}
     return {"ok":True,"mode":req.mode,"message":"重算已開始（背景執行）"}
 
 @app.get("/dynamic/recompute/status")
 def recompute_status():
     return _recompute_status
 
+@app.get("/dynamic/version")
+def cost_version():
+    """路網成本版本；前端每幾秒查一次，有變就重新規劃已查好的路線。"""
+    return {"version": _cost_version, "recomputing": _recompute_status["running"]}
+
 @app.post("/benchmark/recompute")
 def benchmark_recompute(_=Depends(require_admin)):
     import time as _time
-    temp_eid=get_r().add_event("congestion",1.0,25.05,121.52,0.5,description="benchmark_temp")
-    t0=_time.perf_counter()
-    inc_result=get_r().apply_event_incremental(temp_eid)
-    t_inc=_time.perf_counter()-t0
-    get_r().remove_event(temp_eid)
-    t0=_time.perf_counter()
-    get_r().recompute_dynamic_cost(mode="balanced")
-    t_full=_time.perf_counter()-t0
+    with _events_guard():
+        temp_eid=get_r().add_event("congestion",1.0,25.05,121.52,0.5,description="benchmark_temp")
+        t0=_time.perf_counter()
+        inc_result=get_r().apply_event_incremental(temp_eid)
+        t_inc=_time.perf_counter()-t0
+        get_r().remove_event(temp_eid)
+        t0=_time.perf_counter()
+        get_r().recompute_dynamic_cost(mode="balanced")
+        t_full=_time.perf_counter()-t0
     return {"incremental_ms":round(t_inc*1000,2),
             "full_recompute_ms":round(t_full*1000,2),
             "speedup":round(t_full/max(t_inc,0.0001),1),
@@ -400,7 +455,8 @@ def _do_predict(at_index: Optional[int]):
     try:
         _gcn_path()
         from traffic.predict_service import run_prediction
-        result = _apply_pred_events(run_prediction(get_r().db_path, at_index))
+        with _events_guard():                      # 寫入預測事件＋套用，與重算互斥
+            result = _apply_pred_events(run_prediction(get_r().db_path, at_index))
         result["note"] = "事件已寫入並立即增量套用；清除還原時才需 /dynamic/recompute"
         _predict_status.update(running=False, last_ok=time.time(),
                                last_error=None, last_result=result)
@@ -416,10 +472,12 @@ _live_status: dict = {"running": False, "last_ok": None, "last_error": None, "la
 
 def _live_loop(interval: int):
     _gcn_path()
-    from traffic.live_sync import run_live_prediction
+    from traffic.live_sync import predict_live, write_live_prediction
     while _live_status["running"]:
         try:
-            result = _apply_pred_events(run_live_prediction(get_r().db_path))
+            live = predict_live()                  # 下載與預測不持鎖（需數秒到數十秒）
+            with _events_guard():                  # 寫入預測事件＋套用，與重算互斥
+                result = _apply_pred_events(write_live_prediction(get_r().db_path, live))
             _live_status.update(last_ok=time.time(), last_error=None, last_result=result)
             _log.info("live prediction: %s events, window %s",
                       result.get("events_created"), result.get("window"))
@@ -455,8 +513,8 @@ def clear_prediction_events(_=Depends(require_admin)):
     _gcn_path()
     from traffic.predict_service import clear_predictions
     n = clear_predictions(get_r().db_path)
-    return {"ok": True, "deleted": n,
-            "note": "如事件先前已套用成本，請呼叫 /dynamic/recompute 重置"}
+    _schedule_recompute("balanced")                 # 還原預測事件改過的路段
+    return {"ok": True, "deleted": n, "note": "已開始背景重算，數秒後生效"}
 
 @app.get("/predict/compare")
 def predict_compare(at_index: int):
@@ -470,7 +528,7 @@ def predict_compare(at_index: int):
 
 @app.get("/predict/demo", response_class=FileResponse)
 def predict_demo():
-    return FileResponse(_STATIC_DIR / "demo_predict.html", media_type="text/html")
+    return FileResponse(_STATIC_DIR / "demo_predict.html", media_type="text/html", headers=_NO_CACHE)
 
 @app.post("/predict/live/start")
 def predict_live_start(interval: int = 300, _=Depends(require_admin)):
@@ -569,6 +627,7 @@ def route(req:RouteReq):
                     "total_km":round(result.total_km,4),"total_min":round(result.total_min,2),
                     "total_cost":round(result.total_cost,4),"num_edges":len(result.edges),
                     "edges":result.edges,"geojson":geojson,"matched_events":matched,
+                    "closed_km":getattr(result,"closed_km",0.0),   # >0：起終點在封路上，先駛離
                     "analysis_text":OSMRouter.analysis_text(result,sn,en,matched)}
 
         if req.alternatives:

@@ -1,0 +1,56 @@
+{
+  "mode": "system",
+  "guarded": false,
+  "closures": false,
+  "route_baseline_s": 0.069,
+  "round1": {
+    "events": 500,
+    "threads": 32,
+    "wall_s": 92.7,
+    "events_per_s": 5.4,
+    "apply_ms_median": 5771.4,
+    "apply_ms_p95": 7846.3,
+    "apply_ms_max": 8814.2,
+    "errors": [],
+    "error_count": 0,
+    "route_queries": 999,
+    "route_s_median": 0.068,
+    "route_s_max": 0.792,
+    "route_errors": [],
+    "recompute_during_s": null,
+    "db_active_events": 500,
+    "consistency": {
+      "edges_compared": 199533,
+      "edges_differ": 0,
+      "max_cost_diff": 1.1102230246251565e-16,
+      "max_risk_diff": 3.552713678800501e-15,
+      "links_inconsistent": 0,
+      "recompute_s": 8.1
+    }
+  },
+  "round2": {
+    "events": 500,
+    "threads": 32,
+    "wall_s": 113.4,
+    "events_per_s": 4.4,
+    "apply_ms_median": 6404.4,
+    "apply_ms_p95": 16499.9,
+    "apply_ms_max": 20685.4,
+    "errors": [],
+    "error_count": 0,
+    "route_queries": 1039,
+    "route_s_median": 0.075,
+    "route_s_max": 4.527,
+    "route_errors": [],
+    "recompute_during_s": 15.8,
+    "db_active_events": 1000,
+    "consistency": {
+      "edges_compared": 361269,
+      "edges_differ": 3934,
+      "max_cost_diff": 0.026537708271282795,
+      "max_risk_diff": 6.400000000000006,
+      "links_inconsistent": 0,
+      "recompute_s": 14.6
+    }
+  }
+}

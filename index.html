@@ -190,49 +190,75 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14
 #map.heading-up{transform-origin:center center;transition:transform 0.6s ease-out}
 .gps-arrow-svg{transition:transform 0.3s ease-out}
 
-/* Driving Mode */
+/* Driving Mode：導航介面（依手機導航的慣例：上方轉彎卡、下方剩餘時間） */
 body.driving .route-panel,
 body.driving .layer-btn,
 body.driving .layer-dropdown,
 body.driving .legend,
 body.driving .result-panel,
-body.driving .gps-btn{display:none!important}
+body.driving .gps-btn,
+body.driving .leaflet-control-container{display:none!important}
+body.driving .toast-stack{top:150px}           /* 轉彎卡下方，不擋到車子與底部面板 */
 
-.drive-hud{display:none;position:fixed;inset:0;z-index:800;pointer-events:none}
+:root{
+  --nav-green:#0f7a43;--nav-green-dk:#0a5a31;--nav-ink:#1f1f1f;--nav-sub:#5e6368;
+  --nav-eta:#137333;--nav-line:#e3e5e8;--nav-blue:#1a73e8;
+  --nav-font:'Barlow','Noto Sans TC','PingFang TC','Microsoft JhengHei',sans-serif;
+}
+.drive-hud{display:none;position:fixed;inset:0;z-index:800;pointer-events:none;font-family:var(--nav-font)}
 body.driving .drive-hud{display:block}
+.nav-col{position:absolute;left:12px;right:12px;max-width:460px}
+.nav-top{top:12px;display:flex;flex-direction:column;align-items:flex-start;gap:6px}
+.nav-banner{width:100%;display:flex;align-items:center;gap:14px;background:var(--nav-green);color:#fff;
+  border-radius:16px;padding:14px 18px 14px 14px;box-shadow:0 4px 14px rgba(0,0,0,.28)}
+.nav-ico{width:56px;height:56px;flex-shrink:0}
+.nav-ico svg,.nav-then-ico svg{width:100%;height:100%;display:block}
+.nav-ico .h,.nav-then-ico .h{fill:#fff;stroke:none}
+.nav-dist{font-size:34px;font-weight:600;line-height:1.05;font-variant-numeric:tabular-nums}
+.nav-dist small{font-size:20px;font-weight:500;margin-left:5px}
+.nav-instr{font-size:19px;font-weight:600;line-height:1.3;margin-top:3px;overflow-wrap:anywhere}
+.nav-then{display:none;align-items:center;gap:8px;background:var(--nav-green-dk);color:#fff;
+  border-radius:12px;padding:7px 14px 7px 12px;font-size:16px;font-weight:600;box-shadow:0 3px 10px rgba(0,0,0,.25)}
+.nav-then.show{display:flex}
+.nav-then-ico{width:26px;height:26px}
+.nav-arrived .nav-banner{background:var(--nav-ink)}
 
-.drive-top{
-  position:absolute;top:0;left:0;right:0;pointer-events:auto;
-  background:linear-gradient(180deg,rgba(6,13,26,.95) 0%,rgba(6,13,26,.8) 80%,transparent 100%);
-  padding:16px 20px 28px;
-}
-.drive-road{font-family:var(--cond);font-size:28px;font-weight:700;color:#fff;margin-bottom:4px}
-.drive-next{font-size:13px;color:var(--muted)}
-.drive-next span{color:var(--accent)}
-.drive-turn{font-size:17px;color:#00e5a0;margin-top:10px;font-weight:600;min-height:24px}
-.drive-turn .turn-icon{font-size:24px;margin-right:4px;vertical-align:middle}
-
-.drive-bottom{
-  position:absolute;bottom:0;left:0;right:0;pointer-events:auto;
-  background:linear-gradient(0deg,rgba(6,13,26,.95) 0%,rgba(6,13,26,.8) 80%,transparent 100%);
-  padding:28px 20px 20px;display:flex;align-items:center;gap:16px;
-}
-.drive-stat{flex:1;text-align:center}
-.drive-stat .ds-val{font-family:var(--cond);font-size:26px;font-weight:700;color:var(--accent)}
-.drive-stat .ds-lbl{font-size:11px;color:var(--muted);margin-top:2px}
-.drive-stop{
-  width:56px;height:56px;border-radius:50%;background:var(--red);border:none;
-  color:#fff;font-size:22px;cursor:pointer;flex-shrink:0;pointer-events:auto;
-  box-shadow:0 4px 20px rgba(255,68,68,.4);transition:.15s;
-}
-.drive-stop:hover{background:#cc2222;transform:scale(1.05)}
-
-.drive-recenter{
-  position:absolute;bottom:100px;right:16px;pointer-events:auto;
-  width:44px;height:44px;border-radius:50%;background:var(--surf);backdrop-filter:blur(12px);
-  border:1px solid var(--border);color:var(--accent);font-size:18px;
-  cursor:pointer;display:flex;align-items:center;justify-content:center;
-}
+.nav-bottom{bottom:12px;display:flex;flex-direction:column;gap:10px}
+.nav-float{display:flex;align-items:flex-end;justify-content:space-between;gap:8px}
+.nav-speed{width:58px;height:58px;border-radius:50%;background:#fff;color:var(--nav-ink);flex-shrink:0;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;box-shadow:0 2px 10px rgba(0,0,0,.3)}
+.nav-speed b{font-size:22px;line-height:1;font-variant-numeric:tabular-nums}
+.nav-speed span{font-size:11px;color:var(--nav-sub)}
+.nav-road{background:rgba(32,33,36,.88);color:#fff;border-radius:10px;padding:6px 12px;font-size:15px;
+  font-weight:600;max-width:50%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nav-road:empty{visibility:hidden}
+.nav-recenter{pointer-events:auto;visibility:hidden;display:flex;align-items:center;gap:6px;background:#fff;
+  color:var(--nav-blue);border:none;border-radius:22px;padding:10px 16px;font:600 15px var(--nav-font);
+  box-shadow:0 2px 10px rgba(0,0,0,.3);cursor:pointer;flex-shrink:0}
+.nav-recenter.show{visibility:visible}
+.nav-sim{pointer-events:auto;display:none;align-items:center;gap:6px;background:#fff;color:var(--nav-ink);
+  border-radius:14px;padding:6px 8px;box-shadow:0 2px 10px rgba(0,0,0,.25);font-size:13px;width:max-content}
+.nav-sim.show{display:flex}
+.nav-sim .lbl{color:var(--nav-sub);padding:0 4px}
+.nav-sim button{border:1px solid var(--nav-line);background:#fff;border-radius:9px;padding:5px 10px;
+  font:600 13px var(--nav-font);color:var(--nav-ink);cursor:pointer}
+.nav-sim button.on{background:var(--nav-blue);border-color:var(--nav-blue);color:#fff}
+.nav-sheet{pointer-events:auto;background:#fff;color:var(--nav-ink);border-radius:18px;padding:14px 16px;
+  box-shadow:0 4px 18px rgba(0,0,0,.3);display:flex;align-items:center;gap:14px}
+.nav-x,.nav-ov{width:48px;height:48px;border-radius:50%;border:1px solid var(--nav-line);background:#fff;
+  color:var(--nav-ink);cursor:pointer;flex-shrink:0;display:flex;align-items:center;justify-content:center}
+.nav-x{font-size:22px}
+.nav-x:hover,.nav-ov:hover{background:#f1f3f4}
+.nav-ov svg{width:22px;height:22px}
+.nav-eta{flex:1;min-width:0}
+.nav-eta-min{font-size:30px;font-weight:600;color:var(--nav-eta);line-height:1.05;font-variant-numeric:tabular-nums}
+.nav-eta-sub{font-size:15px;color:var(--nav-sub);margin-top:3px}
+.nav-car svg{width:44px;height:44px;display:block;filter:drop-shadow(0 2px 4px rgba(0,0,0,.35));
+  transition:transform .3s ease-out}
+.nav-x:focus-visible,.nav-ov:focus-visible,.nav-recenter:focus-visible,.nav-sim button:focus-visible{
+  outline:3px solid #fbbc04;outline-offset:2px}
+@media(prefers-reduced-motion:reduce){#map.heading-up,.nav-car svg{transition:none}}
+@media(max-width:520px){.nav-dist{font-size:30px}.nav-instr{font-size:17px}.nav-ico{width:48px;height:48px}}
 
 @media(max-width:600px){
   .route-panel{top:8px;left:8px;right:8px;width:auto}
@@ -322,19 +348,41 @@ body.driving .drive-hud{display:block}
   <span style="color:#6b7280">━</span> 其他
 </div>
 
-<!-- Driving HUD -->
+<!-- Driving HUD：導航介面 -->
 <div class="drive-hud" id="driveHud">
-  <div class="drive-top">
-    <div class="drive-turn" id="driveTurn"></div>
-    <div class="drive-road" id="driveRoad">—</div>
-    <div class="drive-next">下一段 <span id="driveNext">—</span></div>
+  <div class="nav-col nav-top">
+    <div class="nav-banner" role="status" aria-live="polite">
+      <div class="nav-ico" id="navIco"></div>
+      <div>
+        <div class="nav-dist" id="navDist">—</div>
+        <div class="nav-instr" id="navInstr"></div>
+      </div>
+    </div>
+    <div class="nav-then" id="navThen"><span>然後</span><span class="nav-then-ico" id="navThenIco"></span></div>
   </div>
-  <button class="drive-recenter" onclick="driveRecenter()">⊕</button>
-  <div class="drive-bottom">
-    <div class="drive-stat"><div class="ds-val" id="driveRemKm">—</div><div class="ds-lbl">剩餘</div></div>
-    <div class="drive-stat"><div class="ds-val" id="driveEta">—</div><div class="ds-lbl">預估到達</div></div>
-    <div class="drive-stat"><div class="ds-val" id="driveSpeed">—</div><div class="ds-lbl">km/h</div></div>
-    <button class="drive-stop" onclick="stopDriving()">■</button>
+  <div class="nav-col nav-bottom">
+    <div class="nav-float">
+      <div class="nav-speed"><b id="navSpeed">0</b><span>km/h</span></div>
+      <div class="nav-road" id="navRoad"></div>
+      <button class="nav-recenter" id="navRecenter" onclick="driveRecenter()">⌖ 重新置中</button>
+    </div>
+    <div class="nav-sim" id="navSim">
+      <span class="lbl">模擬行駛</span>
+      <button id="simPlay" onclick="toggleSim()">暫停</button>
+      <button data-f="1" onclick="setSimFactor(1)">×1</button>
+      <button data-f="4" onclick="setSimFactor(4)">×4</button>
+      <button data-f="10" onclick="setSimFactor(10)">×10</button>
+    </div>
+    <div class="nav-sheet">
+      <button class="nav-x" onclick="stopDriving()" aria-label="結束導航" title="結束導航">✕</button>
+      <div class="nav-eta">
+        <div class="nav-eta-min" id="navEtaMin">—</div>
+        <div class="nav-eta-sub" id="navEtaSub">—</div>
+      </div>
+      <button class="nav-ov" onclick="navOverview()" aria-label="路線概覽" title="路線概覽">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#1a73e8" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="6" r="2.4"/><path d="M8.2 16.6 15.8 7.4"/></svg>
+      </button>
+    </div>
   </div>
 </div>
 
@@ -404,6 +452,8 @@ function showMsg(text,type='info'){
   const el=document.getElementById('rpMsg');el.textContent=text;el.className=`rp-msg ${type}`;
 }
 function hideMsg(){document.getElementById('rpMsg').className='rp-msg';}
+// 自動發生的狀態變化（行駛中路線面板是隱藏的）：同時用通知卡片顯示
+function notify(text,type='info'){if(!driving)showMsg(text,type);showToast(escHtml(text),'',7000);}
 function loading(show,text=''){
   const l=document.getElementById('loader');l.classList.toggle('show',show);
   if(text)document.getElementById('ltxt').textContent=text;
@@ -490,12 +540,14 @@ function onGpsPos(pos){
   gpsCoord={lat,lon:lng};
   gpsError=null;
   if(driving){
-    if(gpsMarker)gpsMarker.setLatLng([lat,lng]);
-    let bearing=null;
-    if(gpsHeading!=null&&isFinite(gpsHeading)&&gpsSpeed>0.5) bearing=gpsHeading;
-    else if(prevGps&&distBetween(prevGps.lat,prevGps.lon,lat,lng)>0.003)
-      bearing=calcBearing(prevGps.lat,prevGps.lon,lat,lng);
-    if(bearing!=null) gpsMovingBearing=bearing;
+    if(!driveSim){                              // 示範模式不跟隨實際定位
+      if(gpsMarker)gpsMarker.setLatLng([lat,lng]);
+      let bearing=null;
+      if(gpsHeading!=null&&isFinite(gpsHeading)&&gpsSpeed>0.5) bearing=gpsHeading;
+      else if(prevGps&&distBetween(prevGps.lat,prevGps.lon,lat,lng)>0.003)
+        bearing=calcBearing(prevGps.lat,prevGps.lon,lat,lng);
+      if(bearing!=null) gpsMovingBearing=bearing;
+    }
   }else{
     if(!gpsMarker){
       gpsMarker=L.circleMarker([lat,lng],{radius:7,fillColor:'#4a9eff',color:'#fff',weight:2,fillOpacity:1,className:'gps-pulse'});
@@ -507,7 +559,7 @@ function onGpsPos(pos){
     if(map.hasLayer(gpsMarker)){map.removeLayer(gpsMarker);if(gpsCircle)map.removeLayer(gpsCircle);}
   }
   document.getElementById('gpsBtn').classList.add('tracking');
-  if(driving) onDriveGpsUpdate();
+  if(driving&&!driveSim) onDriveGpsUpdate();
 }
 function onGpsErr(err){
   document.getElementById('gpsBtn').classList.remove('tracking');
@@ -560,7 +612,7 @@ async function navigate(){
 
 function clearAltRoutes(){altRouteLayers.forEach(l=>{map.removeLayer(l)});altRouteLayers=[];}
 
-function renderRoute(d){
+function renderRoute(d,{fit=true}={}){
   clearAltRoutes();
   if(routeL){if(routeL._outline)map.removeLayer(routeL._outline);map.removeLayer(routeL);routeL=null;}
 
@@ -605,8 +657,11 @@ function renderRoute(d){
     }).addTo(map);
     routeL._outline=routeOutline;
     const b=routeL.getBounds();
-    if(b.isValid())map.fitBounds(b.pad(.08));
+    if(fit&&b.isValid())map.fitBounds(b.pad(.08));
   }
+
+  if(d.closed_km>0)
+    showToast(`⛔ 起點或終點在封閉道路上，路線先沿封閉路段駛離 ${(d.closed_km*1000).toFixed(0)} 公尺`,'',10000);
 
   const modeLabel={'fastest':'最快','balanced':'平衡','safest':'安全'}[d.mode]||d.mode;
   document.getElementById('resSummary').innerHTML=
@@ -647,69 +702,282 @@ function dlAnalysis(){
   document.body.appendChild(a);a.click();a.remove();
 }
 
-// ── Driving Mode
-let driving=false, driveFollowing=true, driveEdges=[], driveEdgeIdx=0;
+// ── Driving Mode（導航）
+let driving=false, driveFollowing=true;
 let lastGpsTime=0, lastGpsCoord=null, currentSpeed=0;
-let offRouteCount=0, rerouting=false, lastEventHash='';
+let offRouteCount=0, rerouting=false;
 let currentBearing=0, gpsMovingBearing=null;
+// 實際位置離路線超過此距離（例如在電腦上展示）時，改以路線起點示範導航（模擬行駛），不跟隨實際定位
+const SIM_FAR_KM=1.0;
+let driveSim=null;
+function drivePos(){return driveSim||gpsCoord;}
+const DRIVE_ROUTE_STYLE={color:'#1a73e8',weight:9,opacity:.95};
+const DONE_ROUTE_STYLE={color:'#9aa0a6',weight:7,opacity:.85};
+const NAV_ZOOM=17;
+const CAR_AT=0.72;            // 車子在畫面高度的位置（0＝頂、1＝底），前方留較多視野
+const THEN_KM=0.4;            // 下一個轉彎在這個距離內，就預告「然後」
+const CAR_SVG='<svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="20" fill="#fff"/>'+
+              '<path d="M24 9 35 36 24 30 13 36z" fill="#1a73e8"/></svg>';
+const navEl=id=>document.getElementById(id);
 
-function buildDriveEdges(){
-  if(!latestRoute?.edges) return[];
-  const rawEdges=latestRoute.edges,merged=[];
-  let prev=null,km=0,mn=0,rawStart=0;
-  for(let i=0;i<rawEdges.length;i++){
-    const e=rawEdges[i],nm=e.name||e.highway||'—';
-    if(nm===prev){km+=e.length_km||0;mn+=e.travel_min||0;}
-    else{if(prev!==null)merged.push({nm:prev,km,mn,rawStart,rawEnd:i-1});prev=nm;km=e.length_km||0;mn=e.travel_min||0;rawStart=i;}
+let nav=null;                 // 導航中的路線：{E, cum, tail, total, mans, arrived}
+let navS=0, navIdx=0, navDoneIdx=0;     // 已行駛公里、目前所在路段、已變灰到第幾段
+let simTimer=null, simPlaying=false, simFactor=4, simLast=0;
+
+function styleDriveRoute(){
+  // 行駛中路線用單一醒目顏色（依道路等級上色時，小路是灰色，在底圖上幾乎看不到）
+  clearAltRoutes();
+  if(!routeL)return;
+  if(routeL._outline)routeL._outline.eachLayer(l=>l.setStyle({color:'#0b4db3',weight:13,opacity:.9}));
+  routeL.eachLayer(l=>l.setStyle(DRIVE_ROUTE_STYLE));
+}
+
+function setHeadingUp(on){
+  // 旋轉地圖時，把地圖放大成畫面對角線大小的正方形並置中，轉到任何角度都蓋滿畫面
+  const el=document.getElementById('map'),c=map.getCenter();
+  if(on){
+    const w=window.innerWidth,h=window.innerHeight,dd=Math.ceil(Math.hypot(w,h));
+    Object.assign(el.style,{inset:'auto',width:dd+'px',height:dd+'px',
+                            left:((w-dd)/2)+'px',top:((h-dd)/2)+'px'});
+    el.classList.add('heading-up');
+  }else{
+    Object.assign(el.style,{inset:'',width:'',height:'',left:'',top:'',transform:''});
+    el.classList.remove('heading-up');
   }
-  if(prev!==null)merged.push({nm:prev,km,mn,rawStart,rawEnd:rawEdges.length-1});
-  return merged;
+  map.invalidateSize({pan:false});
+  map.setView(c,map.getZoom(),{animate:false});
+}
+window.addEventListener('resize',()=>{if(driving){setHeadingUp(true);navUpdate(false);}});
+
+// ── 轉彎點：路名改變的地方；轉彎角度用路口前後各約 40 公尺的方向計算（不受彎道形狀點影響）
+const HW_LABEL={motorway:'國道',motorway_link:'匝道',trunk:'快速道路',trunk_link:'匝道',
+  primary:'主要道路',primary_link:'匝道',secondary:'道路',secondary_link:'匝道',tertiary:'道路',
+  tertiary_link:'匝道',residential:'巷道',service:'巷道',living_street:'巷道',unclassified:'道路',road:'道路'};
+function roadKey(e){return e.name||e.highway||'';}
+function roadName(e){return e.name||HW_LABEL[e.highway]||'道路';}
+
+function turnAngle(E,i){
+  let j=i-1,acc=0;
+  while(j>0&&acc+(E[j].length_km||0)<0.04){acc+=E[j].length_km||0;j--;}
+  let k=i;acc=0;
+  while(k<E.length-1&&acc+(E[k].length_km||0)<0.04){acc+=E[k].length_km||0;k++;}
+  const b1=calcBearing(E[j].lat_a,E[j].lon_a,E[i].lat_a,E[i].lon_a);
+  const b2=calcBearing(E[i].lat_a,E[i].lon_a,E[k].lat_b,E[k].lon_b);
+  return((b2-b1+540)%360)-180;               // 正＝右轉
+}
+
+function maneuver(t,e){
+  const a=Math.abs(t),R=t>0;
+  let type,verb;
+  if(a<20){type='straight';verb='直行';}
+  else if(a<45){type=R?'slight-right':'slight-left';verb=R?'靠右':'靠左';}
+  else if(a<135){type=R?'right':'left';verb=R?'右轉':'左轉';}
+  else if(a<165){type=R?'sharp-right':'sharp-left';verb=R?'向右急轉':'向左急轉';}
+  else{type='uturn';verb='迴轉';}
+  const ramp=/_link$/.test(e.highway||'')&&!e.name;
+  if(ramp)return{type,text:type==='straight'?'駛入匝道':`${verb}駛入匝道`};
+  return{type,text:`${verb}進入${roadName(e)}`};
+}
+
+function buildNav(route){
+  const E=route.edges||[],n=E.length;
+  const cum=new Float64Array(n+1),tail=new Float64Array(n+1);
+  for(let i=0;i<n;i++)cum[i+1]=cum[i]+(E[i].length_km||0);
+  for(let i=n-1;i>=0;i--)tail[i]=tail[i+1]+(E[i].travel_min||0);
+  // 路名改變處＝轉彎點
+  const cuts=[];
+  for(let i=1;i<n;i++)if(roadKey(E[i])!==roadKey(E[i-1]))cuts.push(i);
+  // 1) 路名閃爍：A → 不到 25 公尺的 X → A，視為一直在 A 上（兩個轉彎點都拿掉）
+  for(let c=0;c+1<cuts.length;){
+    if(cum[cuts[c+1]]-cum[cuts[c]]<0.025&&roadKey(E[cuts[c+1]])===roadKey(E[cuts[c]-1])){
+      cuts.splice(c,2);c=Math.max(0,c-1);
+    }else c++;
+  }
+  // 2) 兩個轉彎點相距不到 25 公尺（例如很短的匝道接下一條路）：只留後面那個
+  const keep=cuts.filter((i,c)=>!(c+1<cuts.length&&cum[cuts[c+1]]-cum[i]<0.025));
+  const mans=keep.map(i=>({i,at:cum[i],...maneuver(turnAngle(E,i),E[i])}));
+  mans.push({i:n,at:cum[n],type:'arrive',text:'抵達目的地'});
+  return{E,cum,tail,total:cum[n],mans,arrived:false};
+}
+
+// ── 圖示：右側的轉彎以鏡射畫出左側
+const NAV_SVG={
+  straight:'<path d="M24 44V14"/><path class="h" d="M24 4 12 18h24z"/>',
+  right:'<path d="M17 44V27q0-9 9-9h8"/><path class="h" d="M44 18 32 8v20z"/>',
+  'slight-right':'<path d="M18 44V30l13-13"/><path class="h" d="M38 10l-15 2 13 13z"/>',
+  'sharp-right':'<path d="M17 44V12l15 15"/><path class="h" d="M38 33l-2-15-13 13z"/>',
+  uturn:'<path d="M31 44V20q0-11-10-11T11 20v8"/><path class="h" d="M11 40 2 26h18z"/>',
+  arrive:'<path class="h" d="M24 4c-8 0-14 6-14 14 0 10 14 26 14 26s14-16 14-26c0-8-6-14-14-14z"/>'+
+         '<circle cx="24" cy="18" r="5" fill="#1f1f1f" stroke="none"/>'
+};
+function navIcon(type){
+  const left=/left$/.test(type),body=NAV_SVG[type.replace('left','right')]||NAV_SVG.straight;
+  return '<svg viewBox="0 0 48 48" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" '+
+         `stroke-linejoin="round" aria-hidden="true"><g${left?' transform="matrix(-1 0 0 1 48 0)"':''}>${body}</g></svg>`;
+}
+
+function fmtDist(km){
+  if(km>=1)return{n:km>=10?km.toFixed(0):km.toFixed(1),u:'公里'};
+  const m=km*1000;
+  const r=m>=300?Math.round(m/50)*50:m>=100?Math.round(m/10)*10:Math.round(m/5)*5;
+  return{n:String(r),u:'公尺'};
+}
+function fmtMin(min){
+  min=Math.max(0,Math.round(min));
+  return min<60?`${min} 分`:`${Math.floor(min/60)} 小時 ${min%60} 分`;
+}
+
+// ── 在路線上的位置
+function navPoint(s){
+  const{E,cum}=nav;let i=s>=cum[navIdx]?navIdx:0;
+  while(i<E.length-1&&cum[i+1]<=s)i++;
+  const e=E[i],t=Math.min(1,Math.max(0,(s-cum[i])/((e.length_km||0)||1e-9)));
+  return{i,t,lat:e.lat_a+(e.lat_b-e.lat_a)*t,lon:e.lon_a+(e.lon_b-e.lon_a)*t};
+}
+function projSeg(lat,lon,e){                 // 平面近似：點到路段的距離（公里）與投影比例
+  const kx=111.32*Math.cos(lat*Math.PI/180),ky=110.574;
+  const ax=(e.lon_a-lon)*kx,ay=(e.lat_a-lat)*ky,dx=(e.lon_b-e.lon_a)*kx,dy=(e.lat_b-e.lat_a)*ky;
+  const L2=dx*dx+dy*dy;
+  const t=L2>0?Math.max(0,Math.min(1,-(ax*dx+ay*dy)/L2)):0;
+  return{d:Math.hypot(ax+dx*t,ay+dy*t),t};
+}
+function navSnap(lat,lon){
+  const{E,cum}=nav;let best={d:Infinity,i:0,t:0};
+  const scan=(a,b)=>{for(let i=a;i<b;i++){const r=projSeg(lat,lon,E[i]);if(r.d<best.d)best={d:r.d,i,t:r.t};}};
+  scan(Math.max(0,navIdx-20),Math.min(E.length,navIdx+400));
+  if(best.d>0.15)scan(0,E.length);
+  return{...best,s:cum[best.i]+best.t*(E[best.i].length_km||0)};
+}
+function navBearingAhead(s){
+  const a=navPoint(s),b=navPoint(Math.min(nav.total,s+0.05));
+  return distBetween(a.lat,a.lon,b.lat,b.lon)<0.003?currentBearing:calcBearing(a.lat,a.lon,b.lat,b.lon);
+}
+
+// 鏡頭：地圖朝行進方向旋轉，車子放在畫面下方（CAR_AT），前方看得比較遠
+function navCamera(lat,lon,animate){
+  const z=map.getZoom(),off=(CAR_AT-0.5)*window.innerHeight,r=currentBearing*Math.PI/180;
+  const c=map.unproject(map.project([lat,lon],z).add(L.point(Math.sin(r)*off,-Math.cos(r)*off)),z);
+  if(animate)map.panTo(c,{animate:true,duration:.25,easeLinearity:1});
+  else map.setView(c,z,{animate:false});
+}
+
+function markDone(upto){
+  if(!routeL||upto<=navDoneIdx)return;
+  let k=0;
+  routeL.eachLayer(l=>{if(k>=navDoneIdx&&k<upto)l.setStyle(DONE_ROUTE_STYLE);k++;});
+  navDoneIdx=upto;
+}
+
+function navUpdate(animate=true){
+  if(!driving||!nav)return;
+  const p=navPoint(navS);
+  navIdx=p.i;
+  const heading=navBearingAhead(navS);
+  if(gpsMarker){
+    gpsMarker.setLatLng([p.lat,p.lon]);
+    const svg=gpsMarker.getElement()?.querySelector('svg');
+    if(svg)svg.style.transform=`rotate(${heading}deg)`;   // 車頭朝行進方向（與地圖旋轉無關）
+  }
+  if(driveSim)driveSim={lat:p.lat,lon:p.lon};
+  markDone(navIdx);
+  if(driveFollowing){applyMapRotation(heading);navCamera(p.lat,p.lon,animate);}
+  renderNavHud();
+  if(nav.total-navS<0.02)navArrive();
+}
+
+function renderNavHud(){
+  const{mans,tail,E,total,cum}=nav;
+  let k=mans.findIndex(m=>m.at>navS+0.003);if(k<0)k=mans.length-1;
+  const m=mans[k],m2=mans[k+1],d=fmtDist(Math.max(0,m.at-navS));
+  navEl('navIco').innerHTML=navIcon(m.type);
+  navEl('navDist').innerHTML=`${d.n}<small>${d.u}</small>`;
+  navEl('navInstr').textContent=m.text;
+  const showThen=!!m2&&m2.at-m.at<THEN_KM;
+  navEl('navThen').classList.toggle('show',showThen);
+  if(showThen)navEl('navThenIco').innerHTML=navIcon(m2.type);
+  const e=E[navIdx],t=e?Math.max(0,(navS-cum[navIdx])/((e.length_km||0)||1e-9)):0;
+  navEl('navRoad').textContent=e?roadName(e):'';
+  const remMin=Math.max(0,tail[navIdx]-t*(e?.travel_min||0)),rk=fmtDist(Math.max(0,total-navS));
+  const eta=new Date(Date.now()+remMin*60000).toLocaleTimeString('zh-TW',{hour:'numeric',minute:'2-digit'});
+  navEl('navEtaMin').textContent=fmtMin(remMin);
+  navEl('navEtaSub').textContent=`${rk.n} ${rk.u}，${eta} 抵達`;
+  navEl('navSpeed').textContent=Math.round(currentSpeed);
+}
+
+function navArrive(){
+  if(nav.arrived)return;
+  nav.arrived=true;simPlaying=false;currentSpeed=0;updateSimButtons();
+  document.body.classList.add('nav-arrived');
+  navEl('navIco').innerHTML=navIcon('arrive');
+  navEl('navDist').textContent='已抵達';
+  navEl('navInstr').textContent=document.getElementById('inputEnd')?.value||'目的地';
+  navEl('navThen').classList.remove('show');
+  navEl('navSim').classList.remove('show');
+  navEl('navEtaMin').textContent='已抵達';
+  navEl('navEtaSub').textContent=new Date().toLocaleTimeString('zh-TW',{hour:'numeric',minute:'2-digit'})+' 抵達，5 秒後結束導航';
+  navEl('navSpeed').textContent='0';
+  setTimeout(()=>{if(driving&&nav?.arrived)stopDriving();},5000);
+}
+
+// ── 模擬行駛（示範模式）：依各路段的實際車速（已含事件與時段）沿路線前進
+function simTick(){
+  if(!driving||!driveSim||!nav)return;
+  const now=performance.now(),dt=Math.min(1,(now-simLast)/1000);simLast=now;
+  if(!simPlaying||rerouting||nav.arrived){currentSpeed=0;if(!nav.arrived)renderNavHud();return;}
+  const e=nav.E[navIdx];
+  const v=e&&e.travel_min>0?e.length_km/(e.travel_min/60):30;
+  currentSpeed=v;
+  navS=Math.min(nav.total,navS+v*dt*simFactor/3600);
+  navUpdate(true);
+}
+function toggleSim(){simPlaying=!simPlaying;simLast=performance.now();updateSimButtons();}
+function setSimFactor(f){simFactor=f;updateSimButtons();}
+function updateSimButtons(){
+  navEl('simPlay').textContent=simPlaying?'暫停':'繼續';
+  document.querySelectorAll('#navSim [data-f]').forEach(b=>b.classList.toggle('on',+b.dataset.f===simFactor));
 }
 
 function startDriving(){
-  if(!latestRoute){showMsg('請先查詢路線','err');return;}
-  if(!gpsCoord){showMsg('需要 GPS 定位才能行駛','err');return;}
-  driveEdges=buildDriveEdges();
-  if(!driveEdges.length)return;
-  driveEdgeIdx=0;
-  driving=true;
-  driveFollowing=true;
+  if(!latestRoute?.edges?.length){showMsg('請先查詢路線','err');return;}
+  nav=buildNav(latestRoute);navS=0;navIdx=0;navDoneIdx=0;
+  let farKm=Infinity;
+  if(gpsCoord){const sn=navSnap(gpsCoord.lat,gpsCoord.lon);farKm=sn.d;if(farKm<=SIM_FAR_KM)navS=sn.s;}
+  const fe=latestRoute.edges[0];
+  driveSim=farKm>SIM_FAR_KM?{lat:fe.lat_a,lon:fe.lon_a}:null;
+  driving=true;driveFollowing=true;currentSpeed=0;offRouteCount=0;
   document.body.classList.add('driving');
-  map.setView([gpsCoord.lat,gpsCoord.lon],16);
-  // Replace circle marker with directional arrow
+  document.body.classList.remove('nav-arrived');
+  styleDriveRoute();
+  setHeadingUp(true);
+  const p=navPoint(navS);
+  map.setView([p.lat,p.lon],NAV_ZOOM,{animate:false});
   if(gpsMarker&&map.hasLayer(gpsMarker))map.removeLayer(gpsMarker);
   if(gpsCircle&&map.hasLayer(gpsCircle))map.removeLayer(gpsCircle);
-  gpsMarker=L.marker([gpsCoord.lat,gpsCoord.lon],{icon:L.divIcon({
-    className:'',iconSize:[24,24],iconAnchor:[12,12],
-    html:'<svg width="24" height="24" viewBox="0 0 24 24" class="gps-arrow-svg"><polygon points="12,2 4,20 12,16 20,20" fill="#4a9eff" stroke="#fff" stroke-width="1.5"/></svg>'
-  })}).addTo(map);
-  document.getElementById('map').classList.add('heading-up');
-  const fe=latestRoute.edges[0];
-  if(fe?.lat_a!=null&&fe?.lat_b!=null)applyMapRotation(calcBearing(fe.lat_a,fe.lon_a,fe.lat_b,fe.lon_b));
-  updateDriveHud();
+  gpsMarker=L.marker([p.lat,p.lon],{interactive:false,zIndexOffset:1000,
+    icon:L.divIcon({className:'nav-car',iconSize:[44,44],iconAnchor:[22,22],html:CAR_SVG})}).addTo(map);
+  navEl('navRecenter').classList.remove('show');
+  navEl('navSim').classList.toggle('show',!!driveSim);
+  navUpdate(false);
+  clearInterval(simTimer);simTimer=null;
+  if(driveSim){
+    simPlaying=true;simLast=performance.now();updateSimButtons();
+    simTimer=setInterval(simTick,200);
+    notify(gpsCoord?`目前位置距離路線 ${farKm.toFixed(0)} 公里，以模擬行駛示範導航`
+                   :'未取得定位，以模擬行駛示範導航');
+  }
 }
 
 function stopDriving(){
-  driving=false;
-  driveFollowing=true;
-  driveEdgeIdx=0;
-  driveEdges=[];
-  currentSpeed=0;
-  lastGpsCoord=null;
-  lastGpsTime=0;
-  offRouteCount=0;
-  rerouting=false;
-  lastEventHash='';
-  currentBearing=0; gpsMovingBearing=null;
-  const mapEl=document.getElementById('map');
-  mapEl.style.transform='';
-  mapEl.classList.remove('heading-up');
+  clearInterval(simTimer);simTimer=null;simPlaying=false;
+  driving=false;driveFollowing=true;nav=null;navS=0;navIdx=0;navDoneIdx=0;
+  currentSpeed=0;lastGpsCoord=null;lastGpsTime=0;offRouteCount=0;rerouting=false;
+  driveSim=null;currentBearing=0;gpsMovingBearing=null;
+  setHeadingUp(false);
   if(gpsMarker&&map.hasLayer(gpsMarker))map.removeLayer(gpsMarker);
   gpsMarker=null;
-  document.body.classList.remove('driving');
-  document.getElementById('driveTurn').textContent='';
+  document.body.classList.remove('driving','nav-arrived');
   if(routeL){
-    if(routeL._outline)routeL._outline.eachLayer(l=>l.setStyle({opacity:0.6}));
+    if(routeL._outline)routeL._outline.eachLayer(l=>l.setStyle({color:'#1a1a2e',weight:9,opacity:0.6}));
     routeL.eachLayer(layer=>{
       if(layer.feature){
         const hw=layer.feature.properties?.highway||'';
@@ -725,28 +993,72 @@ function stopDriving(){
 
 function driveRecenter(){
   driveFollowing=true;
-  if(gpsCoord){
-    applyMapRotation(getRouteBearing());
-    map.setView([gpsCoord.lat,gpsCoord.lon],16);
-  }
+  navEl('navRecenter').classList.remove('show');
+  if(map.getZoom()<15)map.setZoom(NAV_ZOOM,{animate:false});
+  navUpdate(false);
 }
 
-async function reroute(lat,lon){
+function navOverview(){
+  // 路線概覽：北朝上、看整條路線；按「重新置中」回到跟車
+  driveFollowing=false;currentBearing=0;
+  document.getElementById('map').style.transform='';
+  navEl('navRecenter').classList.add('show');
+  if(routeL){const b=routeL.getBounds();if(b.isValid())map.fitBounds(b.pad(.12),{animate:false});}
+}
+
+async function reroute(lat,lon,why=''){
   if(rerouting||!endCoord)return;
   rerouting=true;
-  showMsg('重新計算路線...','info');
+  notify(`${why}重新計算路線...`);
+  const prev=latestRoute;
   try{
     const d=await call('/route',{method:'POST',body:JSON.stringify({
       start_lat:lat,start_lon:lon,end_lat:endCoord.lat,end_lon:endCoord.lon,mode
     })});
     latestRoute=d;
-    renderRoute(d);
-    driveEdges=buildDriveEdges();
-    driveEdgeIdx=0;
-    offRouteCount=0;
-    showMsg(`已重新路由：${d.total_km.toFixed(1)}km / ${d.total_min.toFixed(0)}min`,'ok');
-  }catch(e){showMsg('重路由失敗','err');}
+    renderRoute(d,{fit:false});
+    styleDriveRoute();
+    if(driving){
+      nav=buildNav(d);navIdx=0;navDoneIdx=0;offRouteCount=0;
+      navS=(!driveSim&&gpsCoord)?navSnap(gpsCoord.lat,gpsCoord.lon).s:0;
+      navUpdate(false);
+    }
+    notify(`${why}已重新規劃：${routeDiffText(prev,d)}`,'ok');
+  }catch(e){notify('重新規劃失敗：'+e.message,'err');}
   rerouting=false;
+}
+
+function routeDiffText(prev,d){
+  const now=`${d.total_km.toFixed(1)} km · ${d.total_min.toFixed(0)} 分鐘`;
+  if(!prev)return now;
+  return `${prev.total_km.toFixed(1)} → ${d.total_km.toFixed(1)} km · `+
+         `${prev.total_min.toFixed(0)} → ${d.total_min.toFixed(0)} 分鐘`;
+}
+
+// 事件有變動（新增、刪除、預測更新）時，已查好的路線自動重新規劃
+let refreshPending=false;
+async function refreshRouteForEvents(){
+  if(!latestRoute)return;
+  if(rerouting){refreshPending=true;return;}   // 正在算：算完再補一次，不漏掉這次變化
+  if(driving){
+    const p=drivePos();
+    if(p&&!nav?.arrived)await reroute(p.lat,p.lon,'路況變化，');
+  }else if(startCoord&&endCoord){
+    rerouting=true;
+    const prev=latestRoute;
+    try{
+      const d=await call('/route',{method:'POST',body:JSON.stringify({
+        start_lat:startCoord.lat,start_lon:startCoord.lon,end_lat:endCoord.lat,end_lon:endCoord.lon,
+        mode,alternatives:true
+      })});
+      latestRoute=d;
+      renderRoute(d,{fit:false});              // 不移動使用者目前的視角
+      const changed=Math.abs(d.total_km-prev.total_km)>=0.05||Math.abs(d.total_min-prev.total_min)>=0.5;
+      if(changed)notify(`路況變化，已重新規劃：${routeDiffText(prev,d)}`,'ok');
+    }catch(e){notify('路況變化後重新規劃失敗：'+e.message,'err');}
+    finally{rerouting=false;}
+  }
+  if(refreshPending){refreshPending=false;refreshRouteForEvents();}
 }
 
 function distBetween(lat1,lon1,lat2,lon2){
@@ -763,113 +1075,17 @@ function calcBearing(lat1,lon1,lat2,lon2){
   return(Math.atan2(y,x)*180/Math.PI+360)%360;
 }
 
-function getRouteBearing(){
-  if(gpsMovingBearing!=null) return gpsMovingBearing;
-  if(!latestRoute?.edges?.length||!gpsCoord)return currentBearing;
-  const snap=findCurrentEdge(gpsCoord.lat,gpsCoord.lon);
-  const e=latestRoute.edges[snap.rawIdx];
-  if(!e?.lat_a||!e?.lat_b)return currentBearing;
-  return calcBearing(e.lat_a,e.lon_a,e.lat_b,e.lon_b);
-}
-
 function applyMapRotation(newBearing){
   let diff=newBearing-currentBearing;
   if(diff>180)diff-=360; if(diff<-180)diff+=360;
   if(Math.abs(diff)<3)return;
   currentBearing=(currentBearing+diff+360)%360;
-  const rad=currentBearing*Math.PI/180;
-  const s=Math.abs(Math.cos(rad))+Math.abs(Math.sin(rad));
-  document.getElementById('map').style.transform=
-    `rotate(${-currentBearing}deg) scale(${s.toFixed(4)})`;
-  if(gpsMarker){
-    const el=gpsMarker.getElement?.();
-    if(el){el.style.transform=`rotate(${currentBearing}deg)`;el.style.transformOrigin='center center';}
-  }
-}
-
-function getTurnInstruction(prevEdge,nextEdge){
-  if(!prevEdge||!nextEdge)return{icon:'⬆',text:'直行'};
-  const b1=calcBearing(prevEdge.lat_a,prevEdge.lon_a,prevEdge.lat_b,prevEdge.lon_b);
-  const b2=calcBearing(nextEdge.lat_a,nextEdge.lon_a,nextEdge.lat_b,nextEdge.lon_b);
-  let turn=((b2-b1)+360)%360;
-  if(turn>180)turn-=360;
-  if(Math.abs(turn)<25)return{icon:'⬆',text:'直行'};
-  if(turn>=25&&turn<70)return{icon:'↗',text:'微右轉'};
-  if(turn>=70&&turn<150)return{icon:'➡',text:'右轉'};
-  if(turn>=150)return{icon:'↩',text:'迴轉'};
-  if(turn<=-25&&turn>-70)return{icon:'↖',text:'微左轉'};
-  if(turn<=-70&&turn>-150)return{icon:'⬅',text:'左轉'};
-  return{icon:'↩',text:'迴轉'};
-}
-
-function findCurrentEdge(lat,lon){
-  if(!latestRoute?.edges?.length)return{idx:0,dist:Infinity,rawIdx:0};
-  let bestIdx=0, bestDist=Infinity, bestRaw=0;
-  const rawEdges=latestRoute.edges;
-  const merged=driveEdges;
-  let mIdx=0;
-  for(let i=0;i<rawEdges.length;i++){
-    const e=rawEdges[i];
-    const eLat=e.lat_a||lat, eLon=e.lon_a||lon;
-    const d=distBetween(lat,lon,eLat,eLon);
-    const nm=e.name||e.highway||'—';
-    if(mIdx<merged.length&&merged[mIdx].nm===nm){
-      if(d<bestDist){bestDist=d;bestIdx=mIdx;bestRaw=i;}
-    }
-    if(i<rawEdges.length-1){
-      const next=rawEdges[i+1];
-      const nextNm=next.name||next.highway||'—';
-      if(nextNm!==nm)mIdx++;
-    }
-  }
-  return{idx:bestIdx,dist:bestDist,rawIdx:bestRaw};
-}
-
-function updateDriveHud(){
-  if(!driving||!driveEdges.length)return;
-  const cur=driveEdges[driveEdgeIdx]||driveEdges[0];
-  const next=driveEdges[driveEdgeIdx+1];
-  const rawEdges=latestRoute?.edges||[];
-
-  document.getElementById('driveRoad').textContent=cur.nm;
-  document.getElementById('driveNext').textContent=next?`${next.nm}（${next.km.toFixed(1)} km）`:'即將到達終點';
-
-  const turnEl=document.getElementById('driveTurn');
-  if(next&&cur.rawEnd!=null&&next.rawStart!=null){
-    const prevRaw=rawEdges[cur.rawEnd],nextRaw=rawEdges[next.rawStart];
-    const turn=getTurnInstruction(prevRaw,nextRaw);
-    const rawDist=gpsCoord&&nextRaw?distBetween(gpsCoord.lat,gpsCoord.lon,nextRaw.lat_a,nextRaw.lon_a):cur.km;
-    const distStr=rawDist>=1?`${rawDist.toFixed(1)}km`:`${Math.round(rawDist*1000)}m`;
-    turnEl.innerHTML=`<span class="turn-icon">${turn.icon}</span> ${distStr} 後${turn.text}`;
-  }else{
-    turnEl.textContent=next?'':'🏁 即將到達';
-  }
-
-  let remKm=0,remMin=0;
-  for(let i=driveEdgeIdx;i<driveEdges.length;i++){
-    remKm+=driveEdges[i].km;
-    remMin+=driveEdges[i].mn;
-  }
-  document.getElementById('driveRemKm').textContent=remKm>=1?`${remKm.toFixed(1)} km`:`${(remKm*1000).toFixed(0)} m`;
-
-  const now=new Date();
-  const eta=new Date(now.getTime()+remMin*60000);
-  document.getElementById('driveEta').textContent=eta.toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'});
-  document.getElementById('driveSpeed').textContent=Math.round(currentSpeed);
-}
-
-function updateRouteProgress(newIdx){
-  if(!routeL||!driveEdges[newIdx])return;
-  const greyUpTo=driveEdges[newIdx].rawStart;
-  let i=0;
-  routeL.eachLayer(layer=>{
-    if(i<greyUpTo)layer.setStyle({color:'#888',opacity:0.4,weight:4});
-    i++;
-  });
+  // 地圖已由 setHeadingUp 放大成對角線大小，只需旋轉
+  document.getElementById('map').style.transform=`rotate(${-currentBearing}deg)`;
 }
 
 function onDriveGpsUpdate(){
-  if(!driving||!gpsCoord)return;
+  if(!driving||!gpsCoord||!nav||nav.arrived)return;
   const now=Date.now();
   if(lastGpsCoord&&lastGpsTime){
     const dt=(now-lastGpsTime)/1000;
@@ -881,44 +1097,12 @@ function onDriveGpsUpdate(){
   }
   lastGpsCoord={...gpsCoord};
   lastGpsTime=now;
-
-  const snap=latestRoute?.edges?.length?findCurrentEdge(gpsCoord.lat,gpsCoord.lon):{idx:0,dist:Infinity};
-
-  if(!snap||snap.dist>0.08){
-    offRouteCount++;
-    if(offRouteCount>=3){
-      offRouteCount=0;
-      reroute(gpsCoord.lat,gpsCoord.lon);
-      return;
-    }
-  }else{
-    offRouteCount=0;
-  }
-
-  if(snap.idx>=driveEdgeIdx){
-    if(snap.idx>driveEdgeIdx)updateRouteProgress(snap.idx);
-    driveEdgeIdx=snap.idx;
-  }
-
-  if(driveFollowing){
-    applyMapRotation(getRouteBearing());
-    map.setView([gpsCoord.lat,gpsCoord.lon],Math.max(map.getZoom(),15));
-  }
-
-  if(endCoord){
-    const distToEnd=distBetween(gpsCoord.lat,gpsCoord.lon,endCoord.lat,endCoord.lon);
-    if(distToEnd<0.05){
-      showMsg('已到達目的地！','ok');
-      document.getElementById('driveRoad').textContent='🏁 已到達目的地';
-      document.getElementById('driveNext').textContent='';
-      document.getElementById('driveTurn').textContent='';
-      document.getElementById('driveRemKm').textContent='0';
-      document.getElementById('driveEta').textContent='--:--';
-      setTimeout(()=>stopDriving(),3000);
-      return;
-    }
-  }
-  updateDriveHud();
+  const sn=navSnap(gpsCoord.lat,gpsCoord.lon);
+  if(sn.d>0.08){
+    if(++offRouteCount>=3){offRouteCount=0;reroute(gpsCoord.lat,gpsCoord.lon,'偏離路線，');return;}
+  }else offRouteCount=0;
+  if(sn.s>=navS-0.05)navS=sn.s;              // 定位抖動時不倒退
+  navUpdate(true);
 }
 
 map.on('dragstart',()=>{
@@ -926,6 +1110,7 @@ map.on('dragstart',()=>{
     driveFollowing=false;
     currentBearing=0; gpsMovingBearing=null;
     document.getElementById('map').style.transform='';
+    navEl('navRecenter').classList.add('show');
   }
 });
 
@@ -981,28 +1166,24 @@ async function notifyNewEvents(events){
   if(others.length>3)showToast(`⚠️ 另有 ${others.length-3} 個新事件，見地圖圖層`);
 }
 
+let lastEventIds=null, lastCostVersion=null, lastOverlaySig='';
 async function loadOverlays(){
   try{
-    const[events,weather]=await Promise.all([call('/events'),call('/weather')]);
+    const[events,weather,ver]=await Promise.all([call('/events'),call('/weather'),
+                                                 call('/dynamic/version').catch(()=>null)]);
     notifyNewEvents(events);
 
-    if(driving&&latestRoute&&gpsCoord&&!rerouting){
-      const evHash=JSON.stringify(events.map(e=>e.id||`${e.lat},${e.lon}`).sort());
-      if(lastEventHash&&evHash!==lastEventHash){
-        const startRaw=driveEdges[driveEdgeIdx]?.rawStart||0;
-        const remaining=latestRoute.edges.slice(startRaw);
-        const onRoute=events.filter(ev=>{
-          if(!ev.lat||!ev.lon)return false;
-          const rad=+(ev.radius_km||0.5);
-          return remaining.some(e=>distBetween(+ev.lat,+ev.lon,e.lat_a,e.lon_a)<rad);
-        });
-        if(onRoute.length>0){
-          showMsg(`路線上出現 ${onRoute.length} 個新事件，重新計算...`,'info');
-          reroute(gpsCoord.lat,gpsCoord.lon);
-        }
-      }
-      lastEventHash=evHash;
-    }
+    // 路網成本更新完成（新增事件套用完、刪除後重算完、預測更新）→ 已查好的路線重新規劃；
+    // 事件清單變動也觸發（例如背景同步直接重算，不經版本號）
+    const evIds=events.map(e=>e.event_id).sort().join(',');
+    const v=ver?ver.version:null;
+    if((lastCostVersion!==null&&v!==lastCostVersion)||(lastEventIds!==null&&evIds!==lastEventIds))
+      refreshRouteForEvents();
+    lastEventIds=evIds; lastCostVersion=v;
+
+    const sig=JSON.stringify([events,weather]);   // 沒有變化就不重畫（重畫會關掉已開啟的說明框）
+    if(sig===lastOverlaySig)return;
+    lastOverlaySig=sig;
 
     overlayGroups.congestion.clearLayers();overlayGroups.events.clearLayers();overlayGroups.weather.clearLayers();overlayGroups.prediction.clearLayers();
     let cC=0,cE=0,cP=0;
@@ -1053,7 +1234,7 @@ document.addEventListener('click',e=>{
 setupSearch('inputStart','sugStart',(lat,lon,label)=>setStart(lat,lon,label));
 setupSearch('inputEnd','sugEnd',(lat,lon,label)=>setEnd(lat,lon,label));
 ping();initGps();loadOverlays();
-setInterval(ping,30000);setInterval(loadOverlays,15000);   // 15s：新事件通知即時性
+setInterval(ping,30000);setInterval(loadOverlays,5000);    // 5s：新事件與路線重新規劃的即時性（沒變化就不重畫）
 </script>
 </body>
 </html>

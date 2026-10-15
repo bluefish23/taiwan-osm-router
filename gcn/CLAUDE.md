@@ -47,6 +47,10 @@
 | `traffic/calibrate_impact.py` | 以真實事故量測衝擊（幅度/回堵/恢復），校準 BASE_SEVERITY/RADIUS（results/impact_calibration.json） |
 | `traffic/download_vd.py` | VD 車輛偵測器下載+聚合+按里程建圖（全 8 國道 1087 點）；VD 版未採用見坑 #11 |
 | `traffic/live_sync.py` | 即時線上模式：抓 ETag 即時配對車速→滾動 60 分鐘視窗→預測（osm_api `/predict/live/*`）|
+| `traffic/traffic_history.py` | 預測用歷史資料庫：`data/history/YYYYMMDD.npz` 每日一檔（對齊模型路段），由原始矩陣拆分＋逐日匯入 M05A |
+| `traffic/model_update.py` | 持續更新：補新資料→重訓候選模型→最新 3 天上與目前模型比較→平均誤差降 ≥1% 且 30 分鐘不變差才換上（osm_api `/predict/model/*`） |
+| `traffic/model_registry.py` | 模型版本紀錄 `results/models/registry.json`；v0＝原始模型**永不覆寫**；`active_checkpoint()` 供推論使用，可 `activate()` 退回任一版 |
+| `traffic/verify_model_update.py` | 持續更新的驗證（不訓練不下載）：歷史讀回逐值相同、跨缺值視窗排除、版本切換與退回、原始模型 SHA256 未變 |
 | `plot_accuracy.py` | 準確率對比圖（讀 traffic_*.json + benchmark_*.json → results/accuracy_comparison.png） |
 
 ## 重要技術決策與坑（改東西前先讀）

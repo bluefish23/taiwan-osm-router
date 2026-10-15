@@ -1,0 +1,41 @@
+{
+  "active": "v1",
+  "versions": [
+    {
+      "id": "v0",
+      "path": "results/traffic_tgcn.ckpt",
+      "created": null,
+      "status": "baseline",
+      "note": "原始模型（2026/5/10～5/30 資料訓練）"
+    },
+    {
+      "id": "v1",
+      "path": "results/models/tgcn_20261015_103428.ckpt",
+      "created": "2026-10-15T10:34:29",
+      "status": "active",
+      "train_span": [
+        "20260510",
+        "20260615"
+      ],
+      "test_span": [
+        "20260618",
+        "20260620"
+      ],
+      "data_days": 42,
+      "metrics": {
+        "MAE@5min": 2.013,
+        "MAE@15min": 2.611,
+        "MAE@30min": 3.202,
+        "MAE_mean": 2.609
+      },
+      "compared_with": "v0",
+      "compared_metrics": {
+        "MAE@5min": 2.027,
+        "MAE@15min": 2.646,
+        "MAE@30min": 3.255,
+        "MAE_mean": 2.643
+      },
+      "gain": 0.0129
+    }
+  ]
+}

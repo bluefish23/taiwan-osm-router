@@ -69,6 +69,12 @@ async def lifespan(app):
 
         print("[startup] TDX/CWA sync disabled (demo mode — manual events only)")
 
+        # 預測模型定期自動更新（0 = 關閉，只能手動 POST /predict/model/update）
+        model_hours = float(os.getenv("MODEL_UPDATE_HOURS", "0") or 0)
+        if model_hours > 0:
+            threading.Thread(target=_model_update_loop, args=(model_hours,), daemon=True).start()
+            print(f"[startup] 預測模型每 {model_hours:g} 小時自動更新（比目前準才換上）")
+
         print(f"[startup] 就緒（切割 {'開' if use_partition else '關'}、"
               f"事件傳播 {'開' if use_propagation else '關'}）")
     except FileNotFoundError:
@@ -484,6 +490,58 @@ def predict_live_stop(_=Depends(require_admin)):
 def predict_live_status():
     return _live_status
 
+# ── 預測模型持續更新：補新資料 → 重新訓練 → 用最新幾天驗證 → 比目前準才換上 ──
+# （gcn/traffic/model_update.py；原始模型永遠保留為 v0，可隨時切回）
+_model_status: dict = {"running": False, "last_ok": None, "last_error": None, "last_result": None}
+
+def _do_model_update(download: bool = True):
+    try:
+        _gcn_path()
+        from traffic.model_update import run_update
+        result = run_update(download=download, log=_log.info)
+        _model_status.update(running=False, last_ok=time.time(), last_error=None,
+                             last_result=result)
+        _log.info("model update: promoted=%s gain=%s active=%s",
+                  result.get("promoted"), result.get("gain"), result.get("active"))
+    except Exception as e:
+        _model_status.update(running=False, last_error=str(e))
+        _log.exception("model update failed")
+
+def _model_update_loop(hours: float):
+    while True:
+        time.sleep(hours * 3600)
+        if not _model_status["running"]:
+            _model_status.update(running=True, last_error=None)
+            _do_model_update()
+
+@app.get("/predict/model")
+def predict_model():
+    """目前啟用的預測模型、所有版本與最近一次更新結果。"""
+    _gcn_path()
+    from traffic.model_registry import load_registry
+    return {"registry": load_registry(), "update": _model_status}
+
+@app.post("/predict/model/update")
+def predict_model_update(download: bool = True, _=Depends(require_admin)):
+    """背景執行一次模型更新；新模型比目前的準才會換上。"""
+    if _model_status["running"]:
+        return {"ok": True, "message": "模型更新已在執行中"}
+    _model_status.update(running=True, last_error=None)
+    threading.Thread(target=_do_model_update, args=(download,), daemon=True).start()
+    return {"ok": True, "message": "模型更新已開始（背景）：補資料 → 重新訓練 → 驗證，比目前準才換上"}
+
+@app.post("/predict/model/activate")
+def predict_model_activate(version: str, _=Depends(require_admin)):
+    """切換啟用的模型版本（例如 version=v0 退回原始模型）。下一次預測即生效。"""
+    _gcn_path()
+    from traffic.model_registry import activate
+    try:
+        reg = activate(version)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(409, str(e))
+    return {"ok": True, "active": reg["active"]}
 
 @app.post("/route")
 def route(req:RouteReq):

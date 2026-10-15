@@ -79,15 +79,19 @@ def clear_predictions(db_path: str) -> int:
 class TrafficPredictor:
     """載入訓練好的 T-GCN checkpoint 做車速推論。"""
 
-    def __init__(self, ckpt_path: Path = CKPT):
+    def __init__(self, ckpt_path: Path | None = None):
         import sys
         if str(GCN_DIR) not in sys.path:
             sys.path.insert(0, str(GCN_DIR))
         import torch
         from gcn_layer import normalize_adjacency, sparse_to_torch
+        from traffic.model_registry import active_checkpoint
         from traffic.tgcn_model import NodeGRU, TGCN
         from traffic.train_traffic import build_adjacency
 
+        # 未指定時用目前啟用的版本（model_registry；沒有新版本時就是原始模型 CKPT）
+        ckpt_path = Path(ckpt_path) if ckpt_path else active_checkpoint()
+        self.ckpt_path = ckpt_path
         self.torch = torch
         ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
         self.sections: list[str] = ckpt["sections"]
@@ -114,19 +118,25 @@ class TrafficPredictor:
         return out.squeeze(0).numpy() * n["sp_std"] + n["sp_mean"]
 
 
+def get_predictor() -> TrafficPredictor:
+    """共用的推論器；模型更新換上新版本後，下一次呼叫自動改用新版本。"""
+    global _PREDICTOR
+    from traffic.model_registry import active_checkpoint
+    if _PREDICTOR is None or _PREDICTOR.ckpt_path != active_checkpoint():
+        _PREDICTOR = TrafficPredictor()
+    return _PREDICTOR
+
+
 def run_prediction(db_path: str, at_index: int | None = None,
                    horizon_pick: int = -1) -> dict:
     """跑一輪預測並把壅塞事件寫入 DB。回傳摘要 dict。
 
     horizon_pick：用哪個預測視野建事件（-1 = 最遠，即 30 分鐘）。
     """
-    global _PREDICTOR
     data = np.load(DATA, allow_pickle=True)
     speed, volume = data["speed"], data["volume"]
     sections = data["sections"]
-    if _PREDICTOR is None:
-        _PREDICTOR = TrafficPredictor()
-    predictor = _PREDICTOR
+    predictor = get_predictor()
     if list(sections) != predictor.sections:
         raise RuntimeError("m05a 矩陣與 checkpoint 的路段清單不一致，請重新訓練")
 
@@ -195,14 +205,11 @@ def compare_prediction(at_index: int, horizon_pick: int = -1) -> dict:
 
     不寫入 DB，純比對。實際車速取自矩陣（重播資料的未來真值）。
     """
-    global _PREDICTOR
     data = np.load(DATA, allow_pickle=True)
     speed, volume = data["speed"], data["volume"]
     sections = data["sections"]
     timestamps = data["timestamps"].astype("datetime64[ns]")
-    if _PREDICTOR is None:
-        _PREDICTOR = TrafficPredictor()
-    p = _PREDICTOR
+    p = get_predictor()
 
     horizon_steps = p.horizons[horizon_pick]
     horizon_min = horizon_steps * 5

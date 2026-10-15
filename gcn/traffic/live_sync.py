@@ -23,7 +23,7 @@ GCN_DIR = Path(__file__).resolve().parent.parent
 if str(GCN_DIR) not in sys.path:
     sys.path.insert(0, str(GCN_DIR))
 from traffic.predict_service import (DATA, TrafficPredictor,           # noqa: E402
-                                     write_congestion_events)
+                                     get_predictor, write_congestion_events)
 from traffic.download_m05a import fetch_tisvcloud                      # noqa: E402
 
 ETAG_LIVE = ("https://tisvcloud.freeway.gov.tw/history/motc20/ETag/"
@@ -31,15 +31,21 @@ ETAG_LIVE = ("https://tisvcloud.freeway.gov.tw/history/motc20/ETag/"
 LAG_MIN = 10          # 即時檔有數分鐘延遲，視窗結束時刻退 10 分鐘較保險
 TMP = GCN_DIR / "data" / "etag" / "_livetmp"
 
-_PREDICTOR: TrafficPredictor | None = None
 _FREEFLOW: np.ndarray | None = None
+_VOLUME: np.ndarray | None = None
 
 
 def _predictor() -> TrafficPredictor:
-    global _PREDICTOR
-    if _PREDICTOR is None:
-        _PREDICTOR = TrafficPredictor()
-    return _PREDICTOR
+    # 與重播模式共用推論器：模型更新換上新版本後自動改用（model_update / model_registry）
+    return get_predictor()
+
+
+def _volume_baseline() -> np.ndarray:
+    """各路段的典型 5 分鐘交通量（中位數），即時檔缺該路段時的補值。"""
+    global _VOLUME
+    if _VOLUME is None:
+        _VOLUME = np.median(np.load(DATA, allow_pickle=True)["volume"], axis=0).astype(np.float32)
+    return _VOLUME
 
 
 def _freeflow_baseline() -> np.ndarray:
@@ -53,8 +59,11 @@ def _freeflow_baseline() -> np.ndarray:
     return _FREEFLOW
 
 
-def parse_pair_live(raw: bytes) -> dict[str, float]:
-    """ETagPairLive → {配對ID: 流量加權平均車速}（各車種以 VehicleCount 加權）。"""
+def parse_pair_live_flows(raw: bytes) -> dict[str, tuple[float, float]]:
+    """ETagPairLive → {配對ID: (流量加權平均車速, 總交通量)}。
+
+    與訓練資料 M05A 的前處理相同：各車種以 VehicleCount 加權平均車速、交通量加總。
+    """
     raw = re.sub(rb'\sxmlns="[^"]+"', b"", raw, count=1)          # 移除預設 namespace
     try:
         root = ET.fromstring(raw)
@@ -71,16 +80,21 @@ def parse_pair_live(raw: bytes) -> dict[str, float]:
                 num += v * s
                 den += v
         if den > 0:
-            out[pid] = num / den
+            out[pid] = (num / den, den)
     return out
 
 
-def _fetch_pair_live(t: datetime) -> dict[str, float] | None:
+def parse_pair_live(raw: bytes) -> dict[str, float]:
+    """ETagPairLive → {配對ID: 流量加權平均車速}（各車種以 VehicleCount 加權）。"""
+    return {pid: spd for pid, (spd, _) in parse_pair_live_flows(raw).items()}
+
+
+def _fetch_pair_live(t: datetime) -> dict[str, tuple[float, float]] | None:
     TMP.mkdir(parents=True, exist_ok=True)
     dest = TMP / f"pair_{t:%Y%m%d_%H%M}.xml.gz"
     try:
         fetch_tisvcloud(ETAG_LIVE.format(day=f"{t:%Y%m%d}", hhmm=f"{t:%H%M}"), dest)
-        parsed = parse_pair_live(gzip.decompress(dest.read_bytes()))
+        parsed = parse_pair_live_flows(gzip.decompress(dest.read_bytes()))
         dest.unlink(missing_ok=True)
         return parsed or None
     except Exception:
@@ -92,10 +106,12 @@ def _fetch_pair_live(t: datetime) -> dict[str, float] | None:
 def build_live_window(sections, n_steps: int):
     """抓最近 n_steps 個 5 分鐘 ETag 即時檔，對齊 sections 建 (T,N) 車速視窗。
 
-    缺的路段補自由流速；缺的時間步以前一步前向填補。回傳 (speed, volume, stamps, got)。
-    volume 以「有觀測=1、缺=0」當佔位特徵（模型 volume 特徵僅需相對變化）。
+    缺的路段補自由流速與典型交通量；缺的時間步以前一步前向填補。
+    回傳 (speed, volume, stamps, got)。volume 是實際交通量，與訓練資料同單位
+    （每 5 分鐘車輛數）——模型的第二個特徵就是這個值，不能用佔位數字。
     """
     ff = _freeflow_baseline()
+    vol0 = _volume_baseline()
     N = len(sections)
     sec_idx = {s: i for i, s in enumerate(sections)}
     tw_now = datetime.now(timezone.utc) + timedelta(hours=8)       # 台灣時間
@@ -103,7 +119,7 @@ def build_live_window(sections, n_steps: int):
     end -= timedelta(minutes=end.minute % 5 + LAG_MIN)            # 對齊 5 分鐘格 + 退延遲
 
     speed = np.tile(ff, (n_steps, 1)).astype(np.float32)
-    volume = np.zeros((n_steps, N), dtype=np.float32)
+    volume = np.tile(vol0, (n_steps, 1)).astype(np.float32)
     stamps, got = [], 0
     prev = None
     for k in range(n_steps):
@@ -112,14 +128,14 @@ def build_live_window(sections, n_steps: int):
         parsed = _fetch_pair_live(t)
         if parsed:
             got += 1
-            for pid, spd in parsed.items():
+            for pid, (spd, vol) in parsed.items():
                 j = sec_idx.get(pid)
                 if j is not None:
                     speed[k, j] = spd
-                    volume[k, j] = 1.0
-            prev = speed[k].copy()
+                    volume[k, j] = vol
+            prev = (speed[k].copy(), volume[k].copy())
         elif prev is not None:
-            speed[k] = prev                                        # 前向填補缺檔
+            speed[k], volume[k] = prev                             # 前向填補缺檔
     return speed, volume, stamps, got
 
 

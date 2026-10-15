@@ -202,6 +202,9 @@ A* 改跑 link 圖。`PartitionedRouter` 繼承 `OSMRouter`，只覆寫
 | GET | `/predict/status` | 預測執行狀態與上次結果 |
 | GET | `/predict/congestion` | 列出預測壅塞事件 |
 | DELETE | `/predict/events` | 清除預測事件（不動 manual/realtime） |
+| GET | `/predict/model` | 預測模型版本（目前啟用、歷次更新與指標） |
+| POST | `/predict/model/update` | 背景執行模型更新：補新資料 → 重訓 → 驗證，比目前準才換上 |
+| POST | `/predict/model/activate?version=` | 切換模型版本（`v0` = 原始模型） |
 
 - 座標範圍檢查：lat 21.5~26.5, lon 118~122.5（台灣）
 
@@ -246,6 +249,7 @@ A* 改跑 link 圖。`PartitionedRouter` 繼承 `OSMRouter`，只覆寫
 | `PRELOAD_ALL_ROADS` | 1=全路網載入記憶體（765 萬邊，啟動 ~100s、RAM ~6.2GB，路由零 DB 查詢、無首查尖峰）。**長程路線在此模式下常撞 A\* 200 萬步上限而失敗**（實測 50 條路線失敗 10 條，含台北→高雄）。0=主幹預載+端點局部圖網格快取（預設，50 條全數成功且總耗時只有一半） | `0` |
 | `PARTITION_MODE` | 1=啟用路口收縮圖（見下節）。**必須搭配 `PRELOAD_ALL_ROADS=0`**，設 1 時會自動停用並印警告 | `0` |
 | `EVENT_PROPAGATION` | 1=事件沿路網往上游傳播（計畫書演算法，見 osm_propagation.py 一節）。**必須搭配 `PARTITION_MODE=1`**，需要 numpy、scipy；條件不符時自動停用並印警告 | `0` |
+| `MODEL_UPDATE_HOURS` | 交通預測模型每幾小時自動更新一次（gcn/traffic/model_update.py）；0=關閉，只能手動觸發。原始模型永遠保留為 v0 | `0` |
 
 ## 開發注意事項
 

@@ -36,16 +36,41 @@ async def lifespan(app):
     db = os.getenv("DB_PATH", "taiwan_osm.db")
     print(f"[startup] DB={db}")
     try:
-        _router = OSMRouter(db)
+        all_roads = os.getenv("PRELOAD_ALL_ROADS", "0") == "1"
+        use_partition = os.getenv("PARTITION_MODE", "0") == "1"
+        if use_partition and all_roads:
+            # 全路網的路口密度太高（service 道路佔一半），收縮只有 3.7 倍，
+            # 卻要多付 74 秒建圖與 208 萬條 link 的索引，不划算。
+            print("[startup] PARTITION_MODE 需搭配 PRELOAD_ALL_ROADS=0，已停用切割")
+            use_partition = False
+
+        # 事件沿路網往上游傳播（計畫書演算法）：需要路口收縮圖當子圖
+        use_propagation = os.getenv("EVENT_PROPAGATION", "0") == "1"
+        if use_propagation and not use_partition:
+            print("[startup] EVENT_PROPAGATION 需搭配 PARTITION_MODE=1，已停用事件傳播")
+            use_propagation = False
+
+        if use_propagation:
+            from osm_propagation import PropagationRouter
+            _router = PropagationRouter(db)
+        elif use_partition:
+            from osm_partition import PartitionedRouter
+            _router = PartitionedRouter(db)
+        else:
+            _router = OSMRouter(db)
         _router.init_dynamic_schema()
         _router.ensure_component_ids()
         # PRELOAD_ALL_ROADS=1：全路網載入記憶體（路由零 DB 查詢，適合大 RAM 機器）
-        _router.load_graph(verbose=True,
-                           all_roads=os.getenv("PRELOAD_ALL_ROADS", "0") == "1")
+        _router.load_graph(verbose=True, all_roads=all_roads)
+        if use_partition:
+            _router.build_link_graph(verbose=True)
+        if use_propagation:
+            use_propagation = _router.build_propagation_index(verbose=True)
 
         print("[startup] TDX/CWA sync disabled (demo mode — manual events only)")
 
-        print("[startup] 就緒")
+        print(f"[startup] 就緒（切割 {'開' if use_partition else '關'}、"
+              f"事件傳播 {'開' if use_propagation else '關'}）")
     except FileNotFoundError:
         print(f"[startup] DB not found at {db} — running without router (upload DB then restart)")
     yield

@@ -3,3 +3,6 @@ uvicorn>=0.24.0
 requests>=2.31.0
 python-dotenv>=1.0.0
 httpx>=0.25.0
+# 事件傳播模式（EVENT_PROPAGATION=1）才需要；未安裝時該模式自動停用
+numpy>=1.24
+scipy>=1.10

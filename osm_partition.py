@@ -38,6 +38,7 @@ import heapq
 import math
 import sqlite3
 import sys
+import threading
 import time
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -100,6 +101,9 @@ class PartitionedRouter(OSMRouter):
         self._dirty_links: Set[Tuple[int, int]] = set()
         self._link_graph_ready = False
         self._link_stats: dict = {}
+        # 事件增量套用與全量重算互斥：重算會先重設所有登記過的路段，途中套用的事件
+        # 若被洗掉或在重算後又套一次，成本就會遺失或重複計算
+        self._event_mutex = threading.RLock()
 
     # ── 建圖 ────────────────────────────────────────────────
 
@@ -542,16 +546,31 @@ class PartitionedRouter(OSMRouter):
         少了這一步，切割模式會完全看不到事件——A* 讀的是 link 的聚合值，
         而事件只改了成員邊。
         """
-        res = super().apply_event_incremental(event_id)
-        if self._link_graph_ready and res.get("applied"):
-            res["links_updated"] = self._refresh_links(self._event_edge_ids(event_id))
-        return res
+        with self._event_mutex:
+            res = super().apply_event_incremental(event_id)
+            if self._link_graph_ready and res.get("applied"):
+                res["links_updated"] = self._refresh_links(self._event_edge_ids(event_id))
+            return res
 
     def recompute_dynamic_cost(self, mode="balanced"):
-        """全圖重算後，把所有曾被改動過的 link 一併同步。"""
-        super().recompute_dynamic_cost(mode=mode)
-        if self._link_graph_ready:
-            self._refresh_links(list(self._modified_edges))
+        """全圖重算，與事件增量套用互斥。"""
+        with self._event_mutex:
+            super().recompute_dynamic_cost(mode=mode)
+
+    def _apply_dynamic_to_graph(self):
+        """全量重算的記憶體階段：重設、重載、同步 link，整段在同一把鎖內完成。
+
+        同步的是「重算前與重算後」登記過的所有路段：被拿掉的事件，其路段在重算時
+        已還原並移出登記清單，只看重算後的清單會漏掉它們所屬的 link。
+        用 try/finally：重載途中出錯時，已重設的路段仍要讓 link 跟上。
+        """
+        with self._graph_lock:
+            before = set(self._modified_edges)
+            try:
+                super()._apply_dynamic_to_graph()
+            finally:
+                if self._link_graph_ready:
+                    self._refresh_links(list(before | self._modified_edges))
 
     # ── 自我驗證 ────────────────────────────────────────────
 

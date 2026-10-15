@@ -30,6 +30,8 @@
 | `build_osm_graph.py` | OSM PBF → SQLite 路網建置工具（離線執行一次） |
 | `osm_router.py` | A* 路徑搜尋引擎 + 動態成本計算核心 |
 | `osm_partition.py` | 路口收縮圖（`PartitionedRouter`，繼承 OSMRouter）；`PARTITION_MODE=1` 時啟用 |
+| `osm_propagation.py` | 事件沿路網往上游傳播（`PropagationRouter`，繼承 PartitionedRouter）；`EVENT_PROPAGATION=1` 時啟用 |
+| `verify_propagation.py` | 事件傳播驗證（推送 vs 精確解、直接相依索引、實地行為；`--db-test` 在資料庫副本上測寫入路徑） |
 | `verify_routes.py` | 路線回歸比對（50 組固定取樣，改動前存基準、改完比對） |
 | `measure_routes.py` | 路徑搜尋成本量測（單條 vs 含備選） |
 | `analyze_complexity.py` | 演算法時間複雜度量測（唯讀，不需伺服器） |
@@ -91,7 +93,7 @@ uvicorn osm_api:app --host 127.0.0.1 --port 8000
 
 作法：把「無向度數 ≠ 2」的節點當路口，兩路口之間的形狀點鏈收成一條 **link**，
 A* 改跑 link 圖。`PartitionedRouter` 繼承 `OSMRouter`，只覆寫
-`_route_inner` / `apply_event_incremental` / `recompute_dynamic_cost`；
+`_route_inner` / `apply_event_incremental` / `recompute_dynamic_cost` / `_apply_dynamic_to_graph`；
 **未建 link 圖、端點不在圖中、展開失敗時全部退回父類別**。
 
 | 指標 | 實測（主幹路網） |
@@ -114,11 +116,59 @@ A* 改跑 link 圖。`PartitionedRouter` 繼承 `OSMRouter`，只覆寫
    否則 A* 讀的是舊值、事件等於沒生效。
 4. **Link 必須存 `edge_ids` 而非 Edge 物件**——Edge 是 namedtuple，
    事件套用時以 `_replace` 產生新物件寫回 `_graph`，存參照會拿到過期成本。
+5. **全量重算後要同步「重算前與重算後」登記過的所有路段**所屬的 link——被刪除的
+   事件，其路段在重算時已還原並移出 `_modified_edges`，只看重算後的清單會漏掉。
+   修正前實測：刪除事件並重算後 22 條 link 殘留事件成本，路線仍在繞路。
+   這一步放在 `_apply_dynamic_to_graph` 覆寫裡、持 `_graph_lock` 並用 try/finally，
+   路由不會看到「路段已重設、link 未同步」的中間狀態；增量套用與全量重算以
+   `_event_mutex` 互斥。
 
 **已知取捨**：切割模式不使用端點局部圖（link 圖在載入後建好，局部圖是路由時
 才動態併入），50 條路線中 10 條因此長 2~8%。已證實 100% 來自此因素，非搜尋誤差。
 附註：原系統的局部圖本身就不是穩定基準——`_local_cells` 跨請求累積，
 同一條路線在乾淨環境與跑過 47 條之後的結果並不相同。
+
+### osm_propagation.py — 事件沿上游傳播（`EVENT_PROPAGATION=1`）
+
+問題：原方法的事件只改一個固定方框，影響不沿路網傳播。另外，三因子的
+「替代道路密度」以 34 公尺的路段計數，真實路網上幾乎一律滿分（隨機 701 個
+主幹道路地點，0 個未達上限），實際只剩道路等級在影響半徑，嚴重度恆為基礎值。
+
+作法（教授計畫書表 CM03）：路口 = 核心節點、link = 子圖；事件所在 link 為活動節點，
+影響以**增量 PageRank 殘差推送**往上游傳（直接呼叫 `gcn/incremental_pagerank._push`），
+每段衰減 `exp(-km/λ)`、在匯入的岔路依車道數代理值分配；每條事件 link 的影響向量
+算一次存入**直接相依索引**（flag N→A）。**原方框法照常先執行**，傳播是再加上去的
+（乘數取較大值），符合 gcn/CLAUDE.md「原方法不可刪改」的規則。
+
+| 指標 | 實測 |
+|---|---|
+| 推送 vs 精確解 (I−B)⁻¹ | 影響 ≥ 0.05 的 link 無遺漏，最大誤差 0.0165 |
+| 國道一號寶山車禍 | 7 條 link、166 條路段，最遠 6.0 km（實測回堵 p75 6.43 km） |
+| 台北忠孝東路 vs 蘇花公路 | 最遠 1.2 vs 6.1 km；影響 ≥ 0.37 的路段 25 vs 154 條 |
+| 直接相依索引 | 首次約 10 ms，同一地點再發生查表約 1 ms |
+| 增量 vs 全量重算（DB 副本） | 595 條路段成本差 0；刪除事件後全部還原 |
+
+**勿在重構時弄丟**：
+
+1. λ = 2.5 km 由 `gcn/results/impact_calibration.json` 的逐門架衰減推得
+   （國道一號區段中位數 4.25 km，扣除約 1.6% 雜訊底後每段剩 17–20%）。
+2. 只傳播 accident / construction / manual。congestion、predicted_congestion 本身就是
+   逐點量測或預測值，再傳播會重複計算；封路與山崩維持原方法。
+3. 建索引用 `INDEX_TOL = PUSH_TOL / 10` 推送。用同一個門檻推送會在每個節點丟掉
+   殘差，多條路徑匯入同一條 link 時一起被丟，實測誤差 0.059、漏掉 3 條 link。
+4. 全量重算後對仍生效的突發事件重新傳播，放在 `_apply_dynamic_to_graph` 覆寫裡、
+   與重設同一把 `_graph_lock`，與增量套用逐條相同。`_propagated` 記錄重算後已傳播的
+   事件，同一事件再套用時跳過傳播（風險是累加的，重複會疊兩次）。
+   傳播只改記憶體，不寫 DB，和原增量法一致。
+5. 事件沒有方向欄位，分隔道路兩側都當事件 link（兩個方向都往上游傳）。
+   事件所在的路＝**最近**的路段（不是等級最高的），同等級且多不到 50 m 的才併入；
+   事件有 `highway` 欄位時只吸附該等級。只在主幹路網上傳播：事件 0.25 km 內沒有
+   主幹道路就不傳播（例：社區道路）。
+6. 封閉路段（成本 ≥ 1e8）不能被傳播改動：乘數公式會把速度夾在下限 3 km/h、
+   寫回有限成本，封閉路段變成可慢速通行。原方框法的非封路分支也有同樣的問題
+   （封路後附近再來一場車禍，封閉路段會變成 3 km/h 可通行），依規則未修改原方法。
+7. 直接相依索引是 LRU（最多 4,096 個事件 link）並以鎖保護；重建 link 圖時傳播索引
+   自動作廢，須重新 `build_propagation_index()`。
 
 ### realtime_sync.py — 即時同步引擎
 
@@ -195,6 +245,7 @@ A* 改跑 link 圖。`PartitionedRouter` 繼承 `OSMRouter`，只覆寫
 | `AUTO_SYNC_INTERVAL` | 同步間隔秒數，0=停用 | `300` |
 | `PRELOAD_ALL_ROADS` | 1=全路網載入記憶體（765 萬邊，啟動 ~100s、RAM ~6.2GB，路由零 DB 查詢、無首查尖峰）。**長程路線在此模式下常撞 A\* 200 萬步上限而失敗**（實測 50 條路線失敗 10 條，含台北→高雄）。0=主幹預載+端點局部圖網格快取（預設，50 條全數成功且總耗時只有一半） | `0` |
 | `PARTITION_MODE` | 1=啟用路口收縮圖（見下節）。**必須搭配 `PRELOAD_ALL_ROADS=0`**，設 1 時會自動停用並印警告 | `0` |
+| `EVENT_PROPAGATION` | 1=事件沿路網往上游傳播（計畫書演算法，見 osm_propagation.py 一節）。**必須搭配 `PARTITION_MODE=1`**，需要 numpy、scipy；條件不符時自動停用並印警告 | `0` |
 
 ## 開發注意事項
 

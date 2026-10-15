@@ -380,28 +380,50 @@ def _gcn_path():
     if p not in sys.path:
         sys.path.insert(0, p)
 
+def _apply_pred_events(result: dict) -> dict:
+    """預測事件立即增量套用（重用原系統 apply_event_incremental），路由馬上反應。"""
+    t0 = time.perf_counter()
+    applied_edges = 0
+    for eid in result.get("event_ids", []):
+        applied_edges += get_r().apply_event_incremental(eid).get("applied", 0)
+    result["incremental_apply_ms"] = round((time.perf_counter() - t0) * 1000, 1)
+    result["incremental_applied_edges"] = applied_edges
+    return result
+
 def _do_predict(at_index: Optional[int]):
     try:
         _gcn_path()
         from traffic.predict_service import run_prediction
-        result = run_prediction(get_r().db_path, at_index)
-        # 預測事件立即增量套用（重用原系統 apply_event_incremental），
-        # 事件一產生路由馬上反應，不需等待全圖 recompute
-        t0 = time.perf_counter()
-        applied_edges = 0
-        for eid in result.get("event_ids", []):
-            applied_edges += get_r().apply_event_incremental(eid).get("applied", 0)
-        result["incremental_apply_ms"] = round((time.perf_counter() - t0) * 1000, 1)
-        result["incremental_applied_edges"] = applied_edges
+        result = _apply_pred_events(run_prediction(get_r().db_path, at_index))
         result["note"] = "事件已寫入並立即增量套用；清除還原時才需 /dynamic/recompute"
         _predict_status.update(running=False, last_ok=time.time(),
                                last_error=None, last_result=result)
         _log.info("prediction done: %s events, %s edges applied in %sms",
-                  result.get("events_created"), applied_edges,
+                  result.get("events_created"), result.get("incremental_applied_edges"),
                   result.get("incremental_apply_ms"))
     except Exception as e:
         _predict_status.update(running=False, last_error=str(e))
         _log.exception("prediction failed")
+
+# ── 即時預測（線上模式）：每 interval 秒抓 ETag 即時資料 → 預測 → 套用 ──
+_live_status: dict = {"running": False, "last_ok": None, "last_error": None, "last_result": None}
+
+def _live_loop(interval: int):
+    _gcn_path()
+    from traffic.live_sync import run_live_prediction
+    while _live_status["running"]:
+        try:
+            result = _apply_pred_events(run_live_prediction(get_r().db_path))
+            _live_status.update(last_ok=time.time(), last_error=None, last_result=result)
+            _log.info("live prediction: %s events, window %s",
+                      result.get("events_created"), result.get("window"))
+        except Exception as e:
+            _live_status.update(last_error=str(e))
+            _log.exception("live prediction failed")
+        for _ in range(max(1, interval)):
+            if not _live_status["running"]:
+                break
+            time.sleep(1)
 
 @app.post("/predict/run")
 def predict_run(at_index: Optional[int] = None, _=Depends(require_admin)):
@@ -443,6 +465,25 @@ def predict_compare(at_index: int):
 @app.get("/predict/demo", response_class=FileResponse)
 def predict_demo():
     return FileResponse(_STATIC_DIR / "demo_predict.html", media_type="text/html")
+
+@app.post("/predict/live/start")
+def predict_live_start(interval: int = 300, _=Depends(require_admin)):
+    """啟動即時預測：每 interval 秒抓 ETag 即時資料，預測並套用（線上模式）。"""
+    if _live_status["running"]:
+        return {"ok": True, "message": "即時預測已在執行中"}
+    _live_status.update(running=True, last_error=None)
+    threading.Thread(target=_live_loop, args=(interval,), daemon=True).start()
+    return {"ok": True, "message": f"即時預測已啟動（每 {interval} 秒更新一次）"}
+
+@app.post("/predict/live/stop")
+def predict_live_stop(_=Depends(require_admin)):
+    _live_status["running"] = False
+    return {"ok": True, "message": "即時預測已停止（既有預測事件保留，需要時可 DELETE /predict/events）"}
+
+@app.get("/predict/live/status")
+def predict_live_status():
+    return _live_status
+
 
 @app.post("/route")
 def route(req:RouteReq):

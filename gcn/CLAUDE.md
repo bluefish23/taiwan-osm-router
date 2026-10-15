@@ -46,6 +46,7 @@
 | `traffic/anomaly_eval.py` | 殘差異常 vs 事故 ground truth：precision/recall/F1（results/anomaly_eval.json + PR 曲線） |
 | `traffic/calibrate_impact.py` | 以真實事故量測衝擊（幅度/回堵/恢復），校準 BASE_SEVERITY/RADIUS（results/impact_calibration.json） |
 | `traffic/download_vd.py` | VD 車輛偵測器下載+聚合+按里程建圖（全 8 國道 1087 點）；VD 版未採用見坑 #11 |
+| `traffic/live_sync.py` | 即時線上模式：抓 ETag 即時配對車速→滾動 60 分鐘視窗→預測（osm_api `/predict/live/*`）|
 | `plot_accuracy.py` | 準確率對比圖（讀 traffic_*.json + benchmark_*.json → results/accuracy_comparison.png） |
 
 ## 重要技術決策與坑（改東西前先讀）

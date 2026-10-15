@@ -249,6 +249,23 @@ button{border:none;border-radius:6px;padding:8px 12px;font-family:var(--cond);
     </div>
 
     <div class="card">
+      <div class="card-title">T-GCN 即時預測
+        <span id="liveDot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted);margin-left:6px;vertical-align:middle"></span>
+      </div>
+      <p style="font-size:11px;color:var(--muted);margin-bottom:8px">抓高公局 ETag 即時車速，每 5 分鐘預測 30 分鐘後壅塞並自動套用</p>
+      <div class="statbar" style="margin-bottom:8px">
+        <div class="sb"><div class="l">資料視窗</div><div class="v" id="liveWin">—</div></div>
+        <div class="sb"><div class="l">預測壅塞</div><div class="v" id="liveEvt">—</div></div>
+        <div class="sb"><div class="l">上次更新</div><div class="v" id="liveTime">—</div></div>
+      </div>
+      <div class="g2">
+        <button class="pr" onclick="liveStart()">▶ 啟動即時預測</button>
+        <button class="dn" onclick="liveStop()">■ 停止</button>
+      </div>
+      <div id="liveMsg" class="msg"></div>
+    </div>
+
+    <div class="card">
       <div class="card-title">動態因子記錄 <span id="evCount" style="color:var(--accent);font-family:var(--mono);font-size:11px;margin-left:6px"></span></div>
       <div class="evlog" id="evlog"><span style="font-size:11px;color:var(--muted)">尚無記錄</span></div>
     </div>
@@ -311,6 +328,29 @@ async function call(path,opts={}){
   return body;
 }
 function msg(id,text,type='info'){const e=document.getElementById(id);if(!e)return;e.textContent=text;e.className=`msg ${type}`;e.style.display='block';}
+
+async function liveStart(){
+  try{const d=await call('/predict/live/start',{method:'POST'});msg('liveMsg',d.message,'ok');setTimeout(refreshLive,2000);}
+  catch(e){msg('liveMsg',e.message,'err');}
+}
+async function liveStop(){
+  try{const d=await call('/predict/live/stop',{method:'POST'});msg('liveMsg',d.message,'info');refreshLive();}
+  catch(e){msg('liveMsg',e.message,'err');}
+}
+async function refreshLive(){
+  try{
+    const s=await call('/predict/live/status');
+    document.getElementById('liveDot').style.background=s.running?'#37d67a':'var(--muted)';
+    const r=s.last_result;
+    if(r){
+      document.getElementById('liveWin').textContent=r.window?r.window.join(' → '):'—';
+      document.getElementById('liveEvt').textContent=(r.events_created??'—')+' 段';
+    }
+    document.getElementById('liveTime').textContent=s.last_ok?new Date(s.last_ok*1000).toLocaleTimeString():'—';
+    if(s.last_error)msg('liveMsg','錯誤：'+s.last_error,'err');
+  }catch(e){}
+}
+setInterval(refreshLive,15000);refreshLive();
 function hideMsg(id){const e=document.getElementById(id);if(e)e.style.display='none';}
 function loading(show,text='處理中...'){
   const l=document.getElementById('loader');l.classList.toggle('show',show);

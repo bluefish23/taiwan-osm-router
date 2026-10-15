@@ -140,6 +140,12 @@ def run_prediction(db_path: str, at_index: int | None = None,
 
     # 自由流速：各路段車速 85 百分位（與 realtime_sync 的 VD 壅塞判定邏輯一致）
     freeflow = np.percentile(speed, 85, axis=0)
+    return write_congestion_events(db_path, pred_speed, freeflow, sections, horizon_min)
+
+
+def write_congestion_events(db_path: str, pred_speed: np.ndarray, freeflow: np.ndarray,
+                            sections, horizon_min: int) -> dict:
+    """由預測車速產生 predicted_congestion 事件並寫入 DB（重播與即時共用）。"""
     ratio = pred_speed / np.maximum(freeflow, 1.0)
     congested = np.where(ratio < CONGESTION_RATIO)[0]
 

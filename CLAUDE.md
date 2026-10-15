@@ -32,6 +32,9 @@
 | `osm_partition.py` | 路口收縮圖（`PartitionedRouter`，繼承 OSMRouter）；`PARTITION_MODE=1` 時啟用 |
 | `osm_propagation.py` | 事件沿路網往上游傳播（`PropagationRouter`，繼承 PartitionedRouter）；`EVENT_PROPAGATION=1` 時啟用 |
 | `verify_propagation.py` | 事件傳播驗證（推送 vs 精確解、直接相依索引、實地行為；`--db-test` 在資料庫副本上測寫入路徑） |
+| `make_event_figures.py` | 事件更新視覺圖（真實路網、只讀資料庫），輸出 `event_figures/*.png` |
+| `make_prediction_figures.py` | 交通預測視覺圖（用 T-GCN checkpoint 跑測試段、只讀），輸出 `event_figures/pred_*.png` |
+| `build_system_ppt.py` | 對外報告簡報（以 `專題(1).pptx` 為版型），輸出 `demo_ppt_system.pptx`；可加輸出路徑參數 |
 | `verify_routes.py` | 路線回歸比對（50 組固定取樣，改動前存基準、改完比對） |
 | `measure_routes.py` | 路徑搜尋成本量測（單條 vs 含備選） |
 | `analyze_complexity.py` | 演算法時間複雜度量測（唯讀，不需伺服器） |

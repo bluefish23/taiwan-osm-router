@@ -193,11 +193,76 @@ def _conn(db_path):
     return c
 
 
+# ── 事件範圍連通性（新增）──────────────────────────────────────
+# 方框法會連同「在範圍內、但沿道路走不到事故點」的路段一起更新，例如國道底下
+# 不相交的平面道路、隔一排房子的巷弄。開啟時只更新方框內與事故點相連的路段；
+# 設 EVENT_CONNECTED_ONLY=0 退回原方框法。
+EVENT_CONNECTED_ONLY = os.getenv("EVENT_CONNECTED_ONLY", "1") != "0"
+EVENT_SAME_ROAD_KM = 0.05     # 與 osm_propagation.SAME_ROAD_KM 相同：分隔道路兩側都算事故所在道路
+# 封路只封事件所在的那條路（新增）：方框法會把範圍內所有道路一起封死——台北松德路一個封路
+# 就封了 5,735 條路段（連快速道路、巷弄都封），起點在範圍內就完全出不去。
+# 設 CLOSURE_ROAD_ONLY=0 退回整片封閉。山崩封路的位置是雨量站、不是道路，維持整片封閉。
+CLOSURE_ROAD_ONLY = os.getenv("CLOSURE_ROAD_ONLY", "1") != "0"
+# 找不到路徑且起終點在封路上時，允許經過起終點這個距離內的封閉路段離開／抵達，
+# 成本為原行車時間的這個倍數（見 OSMRouter._route_exit_closed）
+CLOSED_EXIT_KM = 3.0
+CLOSED_EXIT_FACTOR = 10.0
+
+
+def closure_road_only(event_type) -> bool:
+    return CLOSURE_ROAD_ONLY and event_type == "closure"
+
+
+def event_box_edge_ids(conn, lat, lon, rad, highway=None, road_only=False):
+    """事件 ±rad 公里方框內要更新的 edge_id。
+
+    事故所在道路＝離事件點最近的路段；同等級、且不超過最近距離 + 50 公尺的路段
+    也算（事件沒有方向，分隔道路兩側都要算）。從這些路段出發，只沿方框內的路段
+    （不分方向）走得到的才回傳。增量套用與全量重算都經過這裡，兩者結果才會一致。
+
+    road_only（封路）：只取同一條路——與最近路段同名（沒有路名時同等級且同樣沒有路名）
+    的路段，且只沿這些路段相連；其他道路不受影響。
+    """
+    dlat = rad / 110.574
+    dlon = rad / (111.320 * math.cos(math.radians(lat)))
+    sql = ("SELECT edge_id, from_node, to_node, highway, lat_a, lon_a, name FROM osm_edges "
+           "WHERE lat_a BETWEEN ? AND ? AND lon_a BETWEEN ? AND ?")
+    params = [lat - dlat, lat + dlat, lon - dlon, lon + dlon]
+    if highway:
+        sql += " AND highway=?"
+        params.append(highway)
+    rows = conn.execute(sql, params).fetchall()
+    if not rows or not (EVENT_CONNECTED_ONLY or road_only):
+        return [r[0] for r in rows]
+    pairs = [(r, haversine_km(lat, lon, r[4], r[5])) for r in rows]
+    r0, d0 = min(pairs, key=lambda p: p[1])
+    hw0, name0 = r0[3], r0[6] or ""
+    if road_only:
+        pairs = [(r, d) for r, d in pairs
+                 if ((r[6] or "") == name0 and (name0 or r[3] == hw0))]
+        is_seed = lambda r, d: d <= d0 + EVENT_SAME_ROAD_KM
+    else:
+        is_seed = lambda r, d: r[3] == hw0 and d <= d0 + EVENT_SAME_ROAD_KM
+    adj = collections.defaultdict(list)
+    for r, _ in pairs:
+        adj[r[1]].append(r[2])
+        adj[r[2]].append(r[1])
+    seen = {r[1] for r, d in pairs if is_seed(r, d)}
+    stack = list(seen)
+    while stack:
+        for nb in adj[stack.pop()]:
+            if nb not in seen:
+                seen.add(nb)
+                stack.append(nb)
+    return [r[0] for r, _ in pairs if r[1] in seen]
+
+
 class RouteResult:
     def __init__(self,nodes,edges,total_km,total_min,total_cost,mode):
         self.nodes=nodes; self.edges=edges
         self.total_km=total_km; self.total_min=total_min
         self.total_cost=total_cost; self.mode=mode
+        self.closed_km=0.0        # 起終點在封閉路段上、駛離／駛入時經過的封閉路段長度
 
 
 class OSMRouter:
@@ -442,9 +507,29 @@ class OSMRouter:
     def route(self, start_node, end_node, mode="balanced") -> RouteResult:
         self._graph_lock.acquire()
         try:
-            return self._route_inner(start_node, end_node, mode, None)
+            try:
+                return self._route_inner(start_node, end_node, mode, None)
+            except ValueError as err:
+                return self._route_exit_closed(start_node, end_node, mode, err)
         finally:
             self._graph_lock.release()
+
+    def _route_exit_closed(self, start_node, end_node, mode, err) -> RouteResult:
+        """找不到路徑時的退路（新增）：起點或終點本身在封閉路段上，四周的路都封了。
+
+        改在原始路網上重搜一次，允許經過起終點 CLOSED_EXIT_KM 內的封閉路段
+        （成本 = 原行車時間 × CLOSED_EXIT_FACTOR，會選最短的出路）；其餘封路照樣不能走。
+        仍找不到時拋出原本的錯誤。呼叫端須持有 _graph_lock。
+        """
+        if not str(err).startswith("找不到路徑"):
+            raise err
+        try:
+            r = OSMRouter._route_inner(self, start_node, end_node, mode, None, None,
+                                       exit_closed_km=CLOSED_EXIT_KM)
+        except ValueError:
+            raise err
+        r.closed_km = round(sum(e["length_km"] for e in r.edges if e.get("closed")), 3)
+        return r
 
     def route_alternatives(self, start_node, end_node, mode="balanced", n=2) -> list:
         self._graph_lock.acquire()
@@ -467,14 +552,19 @@ class OSMRouter:
                         penalty_edges.add(e["edge_id"])
                     if budget is None:
                         budget = max(2 * self._last_search_iters, 50_000)
-                except ValueError:
+                except ValueError as err:
+                    if not results and str(err).startswith("找不到路徑"):
+                        try:                     # 起終點在封路上：只回駛離路線，不另找備選
+                            results.append(self._route_exit_closed(start_node, end_node, mode, err))
+                        except ValueError:
+                            pass
                     break
             return results
         finally:
             self._graph_lock.release()
 
     def _route_inner(self, start_node, end_node, mode="balanced", penalty_edges: set = None,
-                     budget_iters: Optional[int] = None) -> RouteResult:
+                     budget_iters: Optional[int] = None, exit_closed_km: float = 0.0) -> RouteResult:
         if not self._graph_loaded:
             raise RuntimeError("請先呼叫 load_graph()")
         graph = self._graph
@@ -530,6 +620,10 @@ class OSMRouter:
             la, lo = self._ncoords.get(nid, (e_la, e_lo))
             return (haversine_km(la, lo, e_la, e_lo) / MAX_SPEED) * 60
 
+        def near_ends(e):
+            return (haversine_km(e.la, e.loa, s_la, s_lo) <= exit_closed_km
+                    or haversine_km(e.la, e.loa, e_la, e_lo) <= exit_closed_km)
+
         heap = [(h(start_node), next(_CTR), start_node, 0.0)]
         best = {start_node: 0.0}
         came_from: dict = {}
@@ -552,8 +646,11 @@ class OSMRouter:
                 while cur in came_from:
                     prev, e = came_from[cur]
                     tsf = tsf_map.get(e.hw, tsf_dflt)
-                    seg_min = e.cost / tsf   # 含事件速度乘數（與搜尋成本一致）
+                    closed = e.cost >= 1e8   # 只會出現在駛離封路的退路搜尋
+                    seg_min = ((e.dist / max(e.spd, MIN_SPEED)) * 60 / tsf if closed
+                               else e.cost / tsf)   # 含事件速度乘數（與搜尋成本一致）
                     edges.append({
+                        "closed": closed,
                         "edge_id": e.eid, "highway": e.hw, "name": e.name,
                         "length_km": e.dist, "speed_kmh": e.spd,
                         "travel_min": seg_min, "risk_score": e.risk,
@@ -587,7 +684,10 @@ class OSMRouter:
                 risk = e.risk + night_r
                 ec2 = adj_cost * (w["time"] + risk * w["risk"])
                 if ec2 >= 1e8:
-                    continue
+                    if not (exit_closed_km and near_ends(e)):
+                        continue
+                    # 駛離／駛入封閉路段：以原行車時間加重計，路線會選最短的出路
+                    ec2 = (e.dist / max(e.spd, MIN_SPEED)) * 60 / tsf * CLOSED_EXIT_FACTOR
 
                 if prev_bearing is not None:
                     cur_bearing = _bearing(e.la, e.loa, e.lb, e.lob)
@@ -660,21 +760,16 @@ class OSMRouter:
                 elat,elon,erad=float(ev["lat"] or 0),float(ev["lon"] or 0),float(ev["radius_km"] or 0.5)
                 sev=float(ev["severity"] or 1); etype=ev["event_type"]
                 mult=INCIDENT_MULT.get(etype,1.25)
-                dlat=erad/110.574; dlon=erad/(111.320*math.cos(math.radians(elat)))
                 hw=ev["highway"] if ev["highway"] and ev["highway"] in VALID_HIGHWAYS else None
-                bbox=(elat-dlat,elat+dlat,elon-dlon,elon+dlon)
+                eids=event_box_edge_ids(conn,elat,elon,erad,hw,closure_road_only(etype))
                 if etype in ("closure", "landslide_closure"):
-                    sql="UPDATE osm_edges SET closure_flag=1,dynamic_mult=999,risk_score=risk_score+100 WHERE lat_a BETWEEN ? AND ? AND lon_a BETWEEN ? AND ?"
-                    params=bbox
-                    if hw: sql+=" AND highway=?"; params=bbox+(hw,)
-                    cur.execute(sql,params)
+                    cur.executemany("UPDATE osm_edges SET closure_flag=1,dynamic_mult=999,risk_score=risk_score+100 WHERE edge_id=?",
+                                    [(e,) for e in eids])
                 else:
                     ra={"accident":8,"construction":5,"congestion":3,"manual":2,
                         "landslide_warning":6,"landslide_high":10}.get(etype,2)*sev
-                    sql="UPDATE osm_edges SET dynamic_mult=MAX(dynamic_mult,?),risk_score=risk_score+? WHERE lat_a BETWEEN ? AND ? AND lon_a BETWEEN ? AND ?"
-                    params=(sev*mult,ra)+bbox
-                    if hw: sql+=" AND highway=?"; params=params+(hw,)
-                    cur.execute(sql,params)
+                    cur.executemany("UPDATE osm_edges SET dynamic_mult=MAX(dynamic_mult,?),risk_score=risk_score+? WHERE edge_id=?",
+                                    [(sev*mult,ra,e) for e in eids])
             for wx in cur.execute("SELECT * FROM dynamic_weather WHERE is_active=1").fetchall():
                 wlat,wlon,wrad=float(wx["lat"] or 0),float(wx["lon"] or 0),float(wx["radius_km"] or 50)
                 dlat=wrad/110.574; dlon=wrad/(111.320*math.cos(math.radians(wlat)))
@@ -773,24 +868,16 @@ class OSMRouter:
             hw_filter = ev["highway"] if ev["highway"] and ev["highway"] in VALID_HIGHWAYS else None
             pred_r, pred_s, factors = self._predict_impact(elat, elon, etype, sev, hw_filter)
             mult = INCIDENT_MULT.get(etype, 1.25)
-            dlat = pred_r / 110.574
-            dlon = pred_r / (111.320 * math.cos(math.radians(elat)))
-            bbox = (elat - dlat, elat + dlat, elon - dlon, elon + dlon)
-            sql = ("SELECT edge_id FROM osm_edges "
-                   "WHERE lat_a BETWEEN ? AND ? AND lon_a BETWEEN ? AND ?")
-            params = list(bbox)
-            if hw_filter:
-                sql += " AND highway=?"
-                params.append(hw_filter)
-            edges = conn.execute(sql, params).fetchall()
+            # 用寫回 DB 的半徑（四捨五入到 4 位），全量重算讀到的是同一個值
+            edges = event_box_edge_ids(conn, elat, elon, round(pred_r, 4), hw_filter,
+                                       closure_road_only(etype))
             conn.execute("UPDATE dynamic_events SET severity=?, radius_km=? WHERE event_id=?",
                          (round(pred_s, 4), round(pred_r, 4), event_id))
             conn.commit()
         applied = 0
         is_closure = etype in ("closure", "landslide_closure")
         with self._graph_lock:
-            for r in edges:
-                eid = r["edge_id"]
+            for eid in edges:
                 loc = self._edge_index.get(eid)
                 if loc is None:
                     continue

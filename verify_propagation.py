@@ -95,7 +95,7 @@ def check_places(r):
 
 
 def check_route(r):
-    """台北→台中：只有原方框法 vs 方框法 + 傳播（都只改記憶體）。"""
+    """台北→台中：只有方框內相連路段 vs 再加傳播（都只改記憶體）。"""
     print("\n[4] 路線影響（台北→台中，平衡模式，只改記憶體）")
     lat, lon = ACCIDENT
     sn = r.nearest_node(*START)["node_id"]; en = r.nearest_node(*END)["node_id"]
@@ -109,8 +109,8 @@ def check_route(r):
     prop = r.propagate_event(lat, lon, "accident", pred_s)
     both = r.route(sn, en)
     print(f"    事件前          {base.total_km:8.2f} km {base.total_min:7.1f} 分")
-    print(f"    原方框法        {box.total_km:8.2f} km {box.total_min:7.1f} 分（{len(rows)} 條路段）")
-    print(f"    方框法 + 傳播   {both.total_km:8.2f} km {both.total_min:7.1f} 分"
+    print(f"    方框內相連      {box.total_km:8.2f} km {box.total_min:7.1f} 分（{len(rows)} 條路段）")
+    print(f"    方框 + 傳播     {both.total_km:8.2f} km {both.total_min:7.1f} 分"
           f"（再加 {prop['edges']} 條路段、{prop['links_updated']} 條 link、最遠 {prop['reach_km']} km、"
           f"{prop['ms']} ms）")
 

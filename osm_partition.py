@@ -35,7 +35,6 @@ from __future__ import annotations
 
 import collections
 import heapq
-import math
 import sqlite3
 import sys
 import threading
@@ -45,7 +44,9 @@ from typing import Dict, List, Optional, Set, Tuple
 from osm_router import (MAX_SPEED, MODE_WEIGHTS, SIGNAL_DELAY_MIN,
                         TURN_PENALTY_MIN, VALID_HIGHWAYS, OSMRouter,
                         RouteResult, _CTR, _bearing, _conn, _night_risk_score,
-                        _time_speed_map, _turn_type, haversine_km)
+                        _time_speed_map, _turn_type, closure_road_only,
+                        event_box_edge_ids,
+                        haversine_km)
 
 # 走訪一條鏈的步數上限，防止純度數 2 的環路（例如環狀道路）造成無限迴圈
 MAX_CHAIN = 20000
@@ -523,22 +524,15 @@ class PartitionedRouter(OSMRouter):
         with _conn(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             ev = conn.execute(
-                "SELECT lat, lon, radius_km, highway FROM dynamic_events "
+                "SELECT lat, lon, radius_km, highway, event_type FROM dynamic_events "
                 "WHERE event_id=?", (event_id,)).fetchone()
             if ev is None:
                 return []
             lat, lon = float(ev["lat"] or 0), float(ev["lon"] or 0)
             rad = float(ev["radius_km"] or 0.5)
-            dlat = rad / 110.574
-            dlon = rad / (111.320 * math.cos(math.radians(lat)))
-            sql = ("SELECT edge_id FROM osm_edges "
-                   "WHERE lat_a BETWEEN ? AND ? AND lon_a BETWEEN ? AND ?")
-            params = [lat - dlat, lat + dlat, lon - dlon, lon + dlon]
-            hw = ev["highway"]
-            if hw and hw in VALID_HIGHWAYS:
-                sql += " AND highway=?"
-                params.append(hw)
-            return [r[0] for r in conn.execute(sql, params)]
+            hw = ev["highway"] if ev["highway"] in VALID_HIGHWAYS else None
+            return event_box_edge_ids(conn, lat, lon, rad, hw,
+                                      closure_road_only(ev["event_type"]))
 
     def apply_event_incremental(self, event_id):
         """套用事件後，同步更新受影響 link 的聚合成本。

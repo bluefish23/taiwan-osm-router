@@ -23,7 +23,7 @@ from matplotlib.patches import Rectangle
 import osm_propagation as OP
 import osm_router
 from osm_router import (BASE_RADIUS, BASE_SEVERITY, INCIDENT_MULT, MAJOR_HW,
-                        MIN_SPEED, RISK_ADDITION)
+                        MIN_SPEED, RISK_ADDITION, event_box_edge_ids)
 
 DB = "taiwan_osm.db"
 OUT = "event_figures"
@@ -190,15 +190,17 @@ def save(fig, name):
 
 
 # ─────────────────────────── 系統計算（只讀） ───────────────────────────
-def affected_edges(con, router, lat, lon, radius_km):
-    """與 apply_event_incremental 相同的選取：起點落在 ±r 方框內、且在路網圖中的路段。"""
-    dlat = radius_km / 110.574
-    dlon = radius_km / (111.320 * math.cos(math.radians(lat)))
-    rows = con.execute(
+def box_rows(con, lat, lon, radius_km):
+    """與 apply_event_incremental 相同的選取：±r 方框內、沿道路與事故點相連的路段。"""
+    ids = event_box_edge_ids(con, lat, lon, round(radius_km, 4))
+    return con.execute(
         "SELECT edge_id, highway, lat_a, lon_a, lat_b, lon_b FROM osm_edges "
-        "WHERE lat_a BETWEEN ? AND ? AND lon_a BETWEEN ? AND ?",
-        (lat - dlat, lat + dlat, lon - dlon, lon + dlon)).fetchall()
-    return [r for r in rows if r["edge_id"] in router._edge_index]
+        f"WHERE edge_id IN ({','.join('?' * len(ids))})", ids).fetchall() if ids else []
+
+
+def affected_edges(con, router, lat, lon, radius_km):
+    """box_rows 中在路網圖（記憶體）裡的路段，也就是增量套用實際改到的。"""
+    return [r for r in box_rows(con, lat, lon, radius_km) if r["edge_id"] in router._edge_index]
 
 
 def apply_in_memory(router, edge_ids, pred_s, etype):
@@ -289,7 +291,7 @@ def fig3_update(con, pj, pred, pairs, rows):
     t = EVENT["type"]
     mult, ra = s * INCIDENT_MULT[t], RISK_ADDITION[t] * s
     fig = new_fig(f"③ 只改範圍內的 {len(pairs):,} 條路段，其餘路網一條都不碰",
-                  "用位置索引直接取出方框內的路段，在記憶體裡改它們的行車時間與風險")
+                  "取出方框內、沿道路與事故點相連的路段，在記憶體裡改它們的行車時間與風險")
     ax = map_axes(fig)
     fit(ax, fig, 0, 0, 1.6)
     draw_roads(ax, pj, roads_in(con, pj, ax.get_xlim()[1] + 0.3, 1.9))
@@ -306,7 +308,7 @@ def fig3_update(con, pj, pred, pairs, rows):
     mix = "、".join(f"{k} {v}" for k, v in by_hw.most_common(4))
     old, new = max(pairs, key=lambda p: p[0].dist if p[0].hw == "motorway" else 0)
     panel(fig, [
-        ("更新了哪些路段", f"共 {len(pairs):,} 條：{mix}\n巷弄不在找路用的主幹路網內"),
+        ("更新了哪些路段", f"共 {len(pairs):,} 條：{mix}\n國道底下不相連的平面道路不更新"),
         ("行車時間", f"× {mult:.2f}\n嚴重度 {s:.2f} × 車禍乘數 {INCIDENT_MULT[t]:.2f}"),
         ("風險分數", f"+ {ra:.1f}（車禍 {RISK_ADDITION[t]} 分 × 嚴重度）"),
         ("舉一段國道為例", f"{old.dist * 1000:.0f} 公尺：{old.cost * 60:.1f} 秒 → "
@@ -406,6 +408,32 @@ def fig6_compare(con, router):
         results.append((title, lat, lon, r_km, s, f))
     save(fig, "6_同一場車禍不同地點.png")
     return results
+
+
+def fig9_road_compare(con, router):
+    """簡報用（不含標題）：同一場車禍發生在國道與社區道路，依道路特性判斷的影響範圍
+    與實際更新的路段。更新的路段與 apply_event_incremental 相同：方框內、與事故點相連。"""
+    fig = plt.figure(figsize=(12, 5.4), dpi=150, facecolor="white")
+    for i, (title, name, lat, lon) in enumerate((COMPARE[0], COMPARE[2])):
+        lat, lon = snap(con, name, lat, lon)
+        r_km, s, f = router._predict_impact(lat, lon, EVENT["type"], BASE_SEVERITY[EVENT["type"]])
+        pj = Proj(lat, lon)
+        x = 0.02 + i * 0.5
+        ax = map_axes(fig, (x, 0.2, 0.46, 0.78))
+        fit(ax, fig, 0, 0, 1.0)
+        draw_roads(ax, pj, roads_in(con, pj, ax.get_xlim()[1] + 0.3, 1.3))
+        upd = box_rows(con, lat, lon, r_km)
+        ax.add_collection(LineCollection(
+            [pj.seg(r["lat_a"], r["lon_a"], r["lat_b"], r["lon_b"]) for r in upd],
+            colors=ACC, linewidths=2.2, zorder=5, capstyle="round"))
+        box(ax, r_km, ACC, lw=1.8)
+        draw_event(ax)
+        scale_bar(ax, 0.5)
+        fig.text(x, 0.12, title, fontsize=16, fontweight="bold", color=INK)
+        # 不標路段數：這裡含社區巷弄，其他頁的路段數只計記憶體中的主幹道路，數字會對不上
+        fig.text(x, 0.045, f"影響範圍 ±{r_km:.2f} 公里", fontsize=15, color=ACC, fontweight="bold")
+        print(f"  比較 {title}：半徑 {r_km:.2f} km、更新 {len(upd)} 條路段、{f}")
+    save(fig, "9_道路特性比較.png")
 
 
 def draw_influence(ax, pj, router, infl, lw=3.4, alpha=1.0):
@@ -688,6 +716,7 @@ def main():
         print(f"  比較 {title} ({la:.5f}, {lo:.5f})：半徑 {rr:.2f} km、嚴重度 {ss:.2f}、{ff}")
     fig7_propagation(con, pj, router, infl, info, t_first, t_hit, r_km)
     fig8_compare_propagation(con, router)
+    fig9_road_compare(con, router)
 
 
 if __name__ == "__main__":

@@ -464,7 +464,7 @@ class WispDeck:
             pa.append(parse_xml(no_fill))
         return ch
 
-    def compare_chart(self, s, l, t, w, h, cats, series, colors, fs=16):
+    def compare_chart(self, s, l, t, w, h, cats, series, colors, fs=16, major=1.0):
         """多組長條放在同一個縱軸上（單位：秒）；小的那組幾乎看不到——這正是重點。"""
         cd = CategoryChartData()
         cd.categories = cats
@@ -491,7 +491,7 @@ class WispDeck:
             ser.format.line.fill.background()
         va = ch.value_axis
         va.minimum_scale = 0
-        va.major_unit = 1.0
+        va.major_unit = major
         va.has_major_gridlines = True
         va.major_gridlines.format.line.color.rgb = LINE
         va.tick_labels.number_format = '0" 秒"'
@@ -513,12 +513,12 @@ class WispDeck:
 def s_cover(d):
     s = d.prs.slides.add_slide(d.l_cover)
     tf = s.shapes.title.text_frame
-    tf.text = "動態路網導航系統"
-    d.fmt(tf.paragraphs[0].runs[0].font, 48, BLACK, True)
+    tf.text = "結合交通預測之即時動態導航系統"
+    d.fmt(tf.paragraphs[0].runs[0].font, 40, BLACK, True)
     p = tf.add_paragraph()
     r = p.add_run()
-    r.text = "Dynamic Road Network Navigation System"
-    d.fmt(r.font, 26, BLACK, False)
+    r.text = "A Real-Time Dynamic Navigation System Integrating Traffic Prediction"
+    d.fmt(r.font, 22, BLACK, False)
     sub = [ph for ph in s.placeholders if ph.placeholder_format.idx == 1][0]
     sub.text_frame.text = "組員：黃奕睿　林秉達　葉芢杰"
     d.fmt(sub.text_frame.paragraphs[0].runs[0].font, 24, BLACK, False)
@@ -736,8 +736,8 @@ def s_arch_diagram(d):
     d.notes(s, "A：POST /route。座標須在 lat 21.5～26.5、lon 118～122.5，超出回傳 400。"
                "最近節點以載入時的節點快照搜尋；A* 在路口收縮圖上搜尋（含 3 條備選），再展開回原路段。"
                "成本 = 行車時間 × (時間權重 + 風險 × 風險權重) + 轉彎 + 號誌。\n"
-               "B：手動事件（POST /events）與 AI 預測（POST /predict/run）走增量更新：方框更新約 20 毫秒，"
-               "再沿上游傳播 1～12 毫秒；每 5 分鐘的 TDX/CWA 同步、刪除事件、天氣變動走全量重算（2.6～4.3 秒，背景執行）。"
+               "B：手動事件（POST /events）與 AI 預測（POST /predict/run）走增量更新：新增一個事件到生效約 33 毫秒（中位數，含寫入與傳播），"
+               "其中沿上游傳播 1～12 毫秒；每 5 分鐘的 TDX/CWA 同步、刪除事件、天氣變動走全量重算（2.6～4.3 秒，背景執行）。"
                "兩條路都只改記憶體中的路網成本並同步切割路網，下一次搜尋立即反映。")
 
 
@@ -787,44 +787,71 @@ def s_event_life(d):
          "全台路況每 5 分鐘整批更新時才整張重算，於背景執行，不影響使用者。", 20, INK,
          anchor=MSO_ANCHOR.MIDDLE)
     d.band(s, 5.6, "新增一個事件，不到一眨眼的時間就反映到路線上")
-    d.notes(s, "這場車禍：① 事故點周圍 ±0.80 公里，往上游最遠 6.0 公里；② 方框內 456 條＋傳播 166 條路段；"
-               "③ 22 段（全台 77,725 段）；④ 重新搜尋不到 0.1 秒。"
-               "新增一個事件：方框更新 18～92 毫秒＋傳播 1～12 毫秒；整張重算 2.6～4.3 秒。")
+    d.notes(s, "這場車禍：① 事故點周圍 ±0.80 公里，往上游最遠 6.0 公里；② 方框內相連 55 條＋傳播 166 條路段；"
+               "③ 2 段（全台 77,725 段）；④ 重新搜尋不到 0.1 秒。"
+               "新增一個事件到生效約 33 毫秒（中位數，含傳播 1～12 毫秒）；整張重算 2.6～4.3 秒。")
 
 
 def s_local_update(d):
-    s, _ = d.new("只更新受影響的道路")
-    d.stat(s, X0, 1.8, 4.9, 1.2, "全台灣重算一次", "約 4 秒", MUTED)
-    d.stat(s, X0, 3.2, 4.9, 1.2, "只更新事故附近", "約 0.02 秒", ACC)
-    d.items_box(s, X0, 4.7, 4.9, 1.8, [
-        (None, "只修改事故附近道路的行車時間"),
-        (None, "其他道路完全不動"),
-    ], sz=21, gap=10)
-    h = d.map_pic(s, "3_更新範圍內路段.png", 6.95, 1.8, 5.8)
-    d.tx(s, 6.95, 1.88 + h, 5.8, 0.4, "橘色：這場車禍更新的道路；方框外完全不動", 16, MUTED)
-    d.notes(s, "整張重算 4.3 秒（7.6M 條路段）；增量更新平均約 20 毫秒（事件半徑內約 1,100 條），快約 200 倍。"
-               "這場車禍：456 條路段，行車時間 ×1.44（嚴重度 0.80 × 車禍乘數 1.80）、風險 +6.4。"
+    s, _ = d.new("依道路特性更新受影響的道路")
+    d.tx(s, X0, 1.62, X1 - X0, 0.8,
+         "系統依事故所在道路的特性判斷影響範圍：道路越重要，影響範圍越大；\n"
+         "只更新範圍內、沿道路與事故相連的道路（橘色），範圍外或不相連的道路完全不動。", 19, INK)
+    path = os.path.join(FIG, "9_道路特性比較.png")
+    iw, ih = Image.open(path).size
+    w = 9.8
+    p = s.shapes.add_picture(path, Inches(X0 + (X1 - X0 - w) / 2), Inches(2.5), Inches(w))
+    p.line.color.rgb = LINE
+    p.line.width = Pt(0.75)
+    d.notes(s, "同一場車禍（嚴重度 0.80）放在兩種道路，兩圖比例尺相同。影響範圍由道路特性推估："
+               "道路關鍵度（國道 1.00、省道 0.65、社區道路 0.15）、附近替代道路密度、路口分流能力；"
+               "實測替代道路密度在主要道路上幾乎都達上限，差異主要來自道路等級。"
+               "更新的路段與系統相同：±r 方框內、沿道路與事故點相連的路段。國道沿線 1.6 公里內沒有交流道，底下的平面道路與國道不相連，所以國道車禍只更新國道本身（兩個方向，55 條路段，原方框法 1,546 條）；社區道路的例子中，方框上緣那條不相連的小路也不再更新（552 → 426 條）。"
+               "只更新範圍內的路段：新增事件約 0.03 秒生效，整張重算約 4 秒；"
                "時段與路線模式在找路時才代入，所以改一次三種模式都適用。")
 
 
 def s_linear(d):
     s, _ = d.new("事件再多也不會算不完")
-    cats = [str(n) for n in range(0, 501, 50)]
-    # benchmark_chart.png（benchmark_recompute.py 實測），單位：秒
-    full = [2.8, 2.6, 3.1, 2.9, 3.1, 3.3, 3.4, 3.6, 3.7, 3.9, 4.3]
-    inc = [v / 1000 for v in (56.7, 84.3, 41.9, 62.3, 51.7, 39.0, 18.3, 42.3, 91.5, 21.8, 19.7)]
+    cats = ["0", "5,000", "1 萬", "2 萬"]
+    # benchmark_events.py scale --no-closure（事件放在真實道路上、路口收縮＋事件傳播），單位：秒
+    full = [2.6, 72.2, 145.2, 287.1]
+    inc = [0.034, 0.033, 0.036, 0.031]
     d.compare_chart(s, X0, 1.7, 6.6, 4.0, cats,
-                    [("全部重算", full), ("只更新附近", inc)], [MUTED, ACC])
-    d.tx(s, X0, 5.7, 6.6, 0.4, "橫軸：系統中已有的事件數；只更新附近的耗時小到幾乎看不見",
+                    [("全部重算", full), ("新增一個事件", inc)], [MUTED, ACC], major=60)
+    d.tx(s, X0, 5.7, 6.6, 0.4, "橫軸：系統中已有的事件數；新增一個事件約 0.03 秒，小到看不見",
          15, MUTED, al=C)
     d.stack_box(s, 8.65, 1.9, 4.1, 4.0, [
         ("不會連鎖", "每個事件只影響附近"),
         ("會停下來", "影響越傳越小就停止"),
         ("線性成長", "事件加倍，工作也加倍"),
     ])
-    d.band(s, 6.25, "找路速度與事件數量無關")
-    d.notes(s, "已有 0～500 個事件時：整張重算 2.6～4.3 秒；新增一個事件 18～92 毫秒。"
-               "k 個事件更新 O(k·m)，m 為每個事件碰到的路段數；找路 O(E log E)，與事件數無關。")
+    d.band(s, 6.25, "找路速度與事件數量無關：已有 2 萬個事件時仍約 0.1 秒")
+    d.notes(s, "benchmark_events.py scale（資料庫副本、事件隨機放在主幹道路上、路口收縮＋事件傳播）。"
+               "已有 0／5,000／1 萬／2 萬個事件：全量重算 2.6／72.2／145.2／287.1 秒（線性成長）；"
+               "新增一個事件到生效 34／33／36／31 毫秒（中位數）；台北→台中找路 0.07／0.08／0.09／0.13 秒。"
+               "k 個事件更新 O(k·m)，m 為每個事件碰到的路段數；找路 O(E log E)，與事件數無關。"
+               "含 2% 封路時，1 萬個事件（約 200 處封路）會把台北與台中之間的主幹道路切斷而找不到路——"
+               "這是封路數量的問題，不是速度問題。")
+
+
+def s_burst(d):
+    s, _ = d.new("大量事件同時湧入")
+    for i, (head, val) in enumerate((("同時送出", "1,000 個事件"), ("處理結果", "全部成功"),
+                                     ("與全量重算比對", "結果一致"))):
+        d.stat(s, X0 + i * 3.7, 1.8, 3.4, 1.35, head, val)
+    d.stack_box(s, 2.0, 3.55, 10.6, 3.0, [
+        ("排隊處理", "依序套用，每秒約處理 4 個，不會遺漏也不會重複"),
+        ("找路照常", "湧入期間仍可找路，稍慢但不中斷"),
+        ("找到並修正", "新增事件與全量重算剛好同時發生時會重複計算，已加鎖修正"),
+    ], hs=20, bs=18, gap=12)
+    d.notes(s, "benchmark_events.py http：真的啟動 API 伺服器（資料庫副本），64 個連線同時送出 1,000 個 POST /events，"
+               "途中觸發一次全量重算。全部回應 200、0 錯誤、1,000 個事件都在；共 233 秒（每秒 4.3 個），"
+               "每個請求等待中位數 8.1 秒、最久 105 秒（Python 的鎖不保證先來先處理）。"
+               "同時持續找路：中位數 0.99 秒（平常 0.20 秒）、最久 8.6 秒（遇到全量重算時）。"
+               "湧入後的路線與全量重算後完全相同（162.83 公里、125.94 分鐘，傍晚尖峰時段）。"
+               "修正前（benchmark_events.py burst，500＋500 個事件、途中重算）：3,934 條路段風險被算兩次（+6.4）；"
+               "修正後 0 條。修正方式：osm_api 的「寫入事件＋套用」與「全量重算」互斥（_events_guard）。")
 
 
 # ════════════════════ 三、事件影響傳播 ════════════════════
@@ -913,6 +940,103 @@ def s_push(d):
                "同一地點第一次計算約十幾毫秒，結果記錄下來，再發生時查表不到 1 毫秒。")
 
 
+def s_graph_terms(d):
+    s, _ = d.new("把路網當成一張圖")
+    yr, js, xe = 2.75, (2.3, 5.5, 8.7, 11.9), 10.3
+    bx, by = 4.1, 3.75                                # 匯入的岔路
+    d.line(s, js[0] - 0.3, yr, js[3] + 0.4, yr, ROAD, 12)
+    d.line(s, js[1], yr, bx, by, ROAD, 9)
+    for (x1, y1, x2, y2), v in (((js[2], yr, js[3], yr), 1.0), ((js[1], yr, js[2], yr), 0.45),
+                                ((js[0], yr, js[1], yr), 0.2), ((js[1], yr, bx, by), 0.15)):
+        d.line(s, x1, y1, x2, y2, orange(v), 12 if y1 == y2 else 9)
+        n = int(math.hypot(x2 - x1, y2 - y1) / 0.4)
+        for k in range(1, n):                         # 形狀點：只描繪彎道，不是路口
+            d.dot(s, x1 + (x2 - x1) * k / n, y1 + (y2 - y1) * k / n, 0.09, WHITE)
+    for x in js:
+        d.dot(s, x, yr, 0.36, DARK)
+    ev = d.val_dot(s, xe, yr, 0.62, "車禍", WHITE, ACC, 13)
+    ev.line.color.rgb = ACC
+    ev.line.width = Pt(2.5)
+    for x1, y1, x2, y2 in ((xe - 0.4, 2.25, js[2] + 0.2, 2.25), (js[2] - 0.2, 2.25, js[1] + 0.2, 2.25),
+                           (js[1] - 0.2, 2.25, js[0] + 0.2, 2.25), (js[1] - 0.25, 3.05, bx + 0.15, 3.8)):
+        d.arrow_line(s, x1, y1, x2, y2, ACC, 2.5)
+    d.tx(s, 2.3, 1.7, 3.6, 0.4, "傳播鏈（往上游）", 17, ACC, True)
+    d.arrow_line(s, 10.3, 1.9, 12.3, 1.9, MUTED, 1.5)
+    d.tx(s, 8.7, 1.7, 1.6, 0.4, "行車方向", 16, MUTED, True)
+    d.tx(s, js[2] - 0.9, 3.0, 1.8, 0.4, "核心節點", 16, DARK, True, C)
+    d.tx(s, 6.0, 3.0, 2.2, 0.4, "子圖", 16, DARK, True, C)
+    d.tx(s, xe - 0.9, 3.12, 1.8, 0.4, "活動節點", 16, ACC, True, C)
+    for i, (head, body, c) in enumerate((("核心節點", "路口：車子可以\n選擇方向的地方", DARK),
+                                         ("子圖", "兩個路口之間\n的一段路", DARK),
+                                         ("活動節點", "發生事件的路段，\n從這裡開始計算", ACC),
+                                         ("傳播鏈", "從事件往上游、\n沿道路相連的路徑", ACC))):
+        d.card(s, X0 + i * 2.8, 4.1, 2.6, 1.5, head, body, c, 20, 16)
+    d.band(s, 5.85, "只計算活動節點所在的傳播鏈，其餘子圖完全不動", 21)
+    d.notes(s, "核心節點＝路口（無向度數 ≠ 2，含道路盡頭），全台主幹路網 35,668 個；"
+               "子圖＝兩路口之間的形狀點鏈，共 77,725 段；活動節點＝事件所在的那一段；"
+               "影響沿傳播鏈往上游推送，遇到匯入的岔路依車道數分配。"
+               "圖中顏色深淺示意影響強度，越往上游越淡。")
+
+
+def s_pagerank(d):
+    s, _ = d.new("增量 PageRank：只算受影響的部分")
+    d.tx(s, X0, 1.6, X1 - X0, 0.8,
+         "PageRank 讓網頁的重要性沿著連結傳遞；\n"
+         "系統用同樣的方法，讓車禍的影響沿著道路傳遞。", 19, INK)
+    for x, head, c, items in (
+            (X0, "全部重算", MUTED, ["每有一個事件，全台每段路都重算",
+                                    "大部分道路其實沒有變化", "路網越大，算得越久"]),
+            (7.4, "增量推送", ACC, ["只從事件所在的路段開始",
+                                   "每段路只記「還要往上游傳多少」",
+                                   "剩下的小於 5% 就停止"])):
+        d.panel(s, x, 2.55, 5.35, 2.35, PANEL, c)
+        d.tx(s, x + 0.25, 2.65, 4.9, 0.5, head, 24, c, True)
+        d.items_box(s, x + 0.25, 3.2, 4.9, 1.6, [(None, t) for t in items], sz=20, gap=8)
+    d.band(s, 5.2, "全台 77,725 段路中，範例車禍只需處理 7 段", 21, ACC)
+    d.tx(s, X0, 6.05, X1 - X0, 0.4, "計算量只與受影響的範圍有關，與路網大小無關", 17, MUTED, al=C)
+    d.notes(s, "殘差推送（Andersen, Chung & Lang, 2006）：每段路有影響估計值 x 與待傳殘差 r。"
+               "每次取出殘差最大的一段，把 r 加進 x，再依「車道比例 × exp(−長度 ÷ 2.5 公里)」分給上游各段；"
+               "所有殘差都小於 0.05 時停止。等同求解 x = r₀ + B·x，但只碰到受影響的路段。"
+               "驗證：與精確解 (I − B)⁻¹ 比較，影響 ≥ 0.05 的路段無遺漏，最大誤差 0.017。"
+               "國道一號寶山車禍：7 段路口之間的路、166 條路段，最遠 6.0 公里。")
+
+
+def s_dep_index(d):
+    s, _ = d.new("直接相依索引：算過的直接查表")
+    lx, lw, rx, rw = 1.9, 3.4, 6.0, 2.7
+    lc, rc = lx + lw / 2, rx + rw / 2
+    _fshape(s, MSO_SHAPE.FLOWCHART_TERMINATOR, lx, 1.8, lw, 0.72, "事件發生在某段路",
+            "（活動節點）", F_BLUE, 17, 14)
+    _fshape(s, MSO_SHAPE.FLOWCHART_DECISION, lx, 2.85, lw, 1.1, "索引中已有記錄", None, F_BLUE, 16)
+    _fshape(s, MSO_SHAPE.FLOWCHART_PROCESS, lx, 4.3, lw, 0.72, "直接取出影響", "查表，不必重算",
+            F_GREEN, 17, 14)
+    _fshape(s, MSO_SHAPE.FLOWCHART_PROCESS, rx, 2.95, rw, 0.9, "增量 PageRank", "計算影響",
+            F_ORANGE, 17, 14)
+    _fshape(s, MSO_SHAPE.FLOWCHART_PROCESS, rx, 4.3, rw, 0.72, "存入索引", "flag 改為 A",
+            F_ORANGE, 17, 14)
+    _fshape(s, MSO_SHAPE.FLOWCHART_TERMINATOR, lx, 5.4, lw, 0.72, "套用到受影響路段", None,
+            F_BLUE, 17)
+    _fpath(d, s, [(lc, 2.52), (lc, 2.85)])
+    _fpath(d, s, [(lc, 3.95), (lc, 4.3)])
+    _fpath(d, s, [(lc, 5.02), (lc, 5.4)])
+    _fpath(d, s, [(lx + lw, 3.4), (rx, 3.4)])
+    _fpath(d, s, [(rc, 3.85), (rc, 4.3)])
+    _fpath(d, s, [(rc, 5.02), (rc, 5.76), (lx + lw, 5.76)])
+    _flabel(d, s, lc + 0.1, 3.98, 1.4, "是 · flag A", F_GREEN, 13, al=L)
+    _flabel(d, s, lx + lw, 3.06, rx - lx - lw, "否", F_ORANGE, 13)
+    _flabel(d, s, lx + lw, 3.47, rx - lx - lw, "flag N", F_ORANGE, 13)
+    d.stack_box(s, 9.0, 1.85, 3.75, 4.3, [
+        ("直接相依", "記下這段路出事時，會影響哪些路段、影響多少"),
+        ("遠處直接更新", "不必等傳播鏈一段一段算完"),
+        ("flag N → A", "第一次發生時計算並存入索引，之後直接查表"),
+        ("效果", "首次十幾毫秒，之後不到 1 毫秒"),
+    ], hs=19, bs=16, gap=12)
+    d.notes(s, "索引以事件所在路段為鍵，存「受影響路段與影響值」，相當於核心節點之間的直接相依係數；"
+               "在索引中＝flag A，不在＝flag N。建索引時用較嚴的門檻（0.005）推送，"
+               "避免多條路徑匯入同一段路時一起丟掉殘差（用 0.05 時實測誤差 0.059、漏掉 3 段）。"
+               "最多保留 4,096 個事件路段（最久未用的先移除）。實測第一次 14 毫秒、查表 0.7 毫秒。")
+
+
 def s_verify(d):
     s, _ = d.new("正確性與適用範圍")
     for x, head, c, items in (
@@ -948,16 +1072,16 @@ def s_shape_points(d):
 
 def s_cut_rule(d):
     s, _ = d.new("以路口切分路網")
-    rows = [("分岔點規則", "分岔超過一條路的點作為核心點，以核心點切分地圖", DARK),
-            ("雙向道問題", "雙向道路中間的點也被視為分岔，幾乎每個點都成為核心點", ACC),
-            ("本組修正", "只有真正的路口（三條路以上交會）與道路盡頭才是核心點", GOOD)]
+    rows = [("分岔點規則", "分岔超過一條路的點作為核心節點，以核心節點切分地圖", DARK),
+            ("雙向道問題", "雙向道路中間的點也被視為分岔，幾乎每點都成為核心節點", ACC),
+            ("本組修正", "只有真正的路口（三條路以上交會）與道路盡頭才是核心節點", GOOD)]
     for i, (head, body, c) in enumerate(rows):
         y = 1.8 + i * 1.3
         d.label_box(s, X0, y, 2.4, 1.05, head, c, 22)
         d.panel(s, 4.35, y, X1 - 4.35, 1.05)
         d.tx(s, 4.55, y, X1 - 4.75, 1.05, body, 20, INK, anchor=MSO_ANCHOR.MIDDLE)
-    d.band(s, 5.85, "以路口為核心點切分，每一段就是兩個路口之間的道路", 21)
-    d.notes(s, "真實路網 78.6% 是雙向道：依出度 > 1 判斷，核心點比例 67.7%（平均子圖 1.5 個點），"
+    d.band(s, 5.85, "以路口為核心節點切分，每個子圖就是兩個路口之間的道路", 21)
+    d.notes(s, "真實路網 78.6% 是雙向道：依出度 > 1 判斷，核心節點比例 67.7%（平均子圖 1.5 個點），"
                "等於沒切；改為無向度數 ≠ 2 後只剩 4.5%（平均子圖 17.3 段路、約 590 公尺）。")
 
 
@@ -988,7 +1112,7 @@ def s_link_sync(d):
         ("其他道路", "完全不動"),
         ("修正", "刪除車禍後也會同步"),
     ], gap=12)
-    d.notes(s, "這場車禍：方框內 456 條路段，屬於 22 段路口之間的路；往上游傳播影響的 7 段也一併同步。"
+    d.notes(s, "這場車禍：方框內相連 55 條路段（國道兩個方向），屬於 2 段路口之間的路；往上游傳播影響的 7 段也一併同步。"
                "修正前實測：刪除事件並重算後有 22 段殘留事件成本，路線仍在繞路。")
 
 
@@ -1073,6 +1197,33 @@ def s_pred_model(d):
     d.notes(s, "T-GCN：每個時間步先做 2 層圖卷積（隱藏維度 64）聚合上下游，再接 GRU；"
                "加入殘差連接保留路段自身車速——拿掉後 5 分鐘誤差反而比純 GRU 差。"
                "輸入過去 12 步（60 分鐘）的車速與車流量，同時輸出 5／15／30 分鐘後三個預測。")
+
+
+def s_gcn_compute(d):
+    s, _ = d.new("圖卷積的計算方式")
+    parts = [("Â 連接關係", "哪些路段相鄰\n大部分是 0", DARK), ("X 路段特徵", "每段路的\n車速、車流", DARK),
+             ("W 模型權重", "訓練時\n學到的參數", DARK), ("新的特徵", "參考了上下游\n的路段狀態", ACC)]
+    for i, (head, body, c) in enumerate(parts):
+        x = X0 + i * 2.8
+        d.card(s, x, 1.8, 2.2, 1.55, head, body, c, 19, 16)
+        if i < 3:
+            d.tx(s, x + 2.2, 1.8, 0.6, 1.55, "=" if i == 2 else "×", 30, DARK, True, C,
+                 MSO_ANCHOR.MIDDLE)
+    for x, head, items in (
+            (X0, "先算 X × W", ["兩種順序，結果完全相同", "先轉換特徵，再乘連接關係",
+                               "特徵越多，省下的計算越多"]),
+            (7.4, "跳過 0 的部分", ["每段路只和前後幾段相連", "連接關係幾乎全是 0",
+                                  "只存、只算非零的部分（稀疏矩陣）"])):
+        d.panel(s, x, 3.6, 5.35, 2.05, PANEL, DARK)
+        d.tx(s, x + 0.25, 3.68, 4.9, 0.5, head, 22, DARK, True)
+        d.items_box(s, x + 0.25, 4.2, 4.9, 1.4, [(None, t) for t in items], sz=18, gap=6)
+    d.band(s, 5.9, "結果完全相同，只是讓電腦少做不必要的計算", 21)
+    d.notes(s, "圖卷積層：Â = D^(−1/2)(A + I)D^(−1/2)，輸出 = Â·(X·W)；交通預測模型即以此順序、"
+               "並以稀疏格式儲存 Â（torch.sparse.mm）。"
+               "乘法順序實驗（20,000 個節點、500 維特徵、64 維輸出）：(Â·X)·W 0.052 秒、Â·(X·W) 0.022 秒，"
+               "快 2.3 倍，乘法次數少 33 倍。稀疏實驗（4,000 個節點）：非零 1% 時稀疏計算快 3.1 倍、"
+               "0.1% 時快 22 倍；非零超過約 5% 時一般矩陣反而較快。"
+               "圖卷積實作以公開資料集 Pubmed 驗證，測試準確率 79.8%（文獻約 79%）。")
 
 
 def s_pred_train(d):
@@ -1294,7 +1445,7 @@ def s_recap(d):
         h = d.map_pic(s, fig, x, 2.2, 2.6)
         d.tx(s, x, 2.3 + h, 2.6, 0.5, line, 18, INK)
     d.band(s, 5.4, "從車禍發生到路線改變，每一步只處理必要部分，合計不到 0.2 秒", 20)
-    d.notes(s, "① 方框 ±0.80 公里＋往上游 6.0 公里；② 456＋166 條路段；③ 22 段；"
+    d.notes(s, "① 方框 ±0.80 公里＋往上游 6.0 公里；② 55＋166 條路段；③ 2 段；"
                "④ 162.74 → 173.79 公里、113.2 → 117.7 分鐘（平日上午 10 點）。")
 
 
@@ -1327,11 +1478,16 @@ def s_limits(d):
         ("可選功能", "影響傳播需另外開啟，並搭配路網切割使用。"),
         ("事件方向", "目前無法得知事故方向，兩個方向都往後傳。"),
         ("嚴重程度", "嚴重車禍回堵較長，未來可依嚴重程度調整。"),
-        ("刪除生效", "刪除事件需等下一次全台路況更新（最多 5 分鐘）。"),
-        ("平行運算", "未來可加入多核心平行處理，進一步加速。"),
-    ], sz=24, gap=16,
+        ("刪除生效", "刪除事件要整張重算才生效，事件很多時需等較久（背景執行）。"),
+        ("尖峰排隊", "大量事件同時湧入時每秒約處理 4 個，需要排隊。"),
+        ("封路重疊", "封路附近又有其他事件時，要等下一次全量重算才完全正確。"),
+        ("平行運算", "不同傳播鏈上的子圖可交給不同核心同時處理，進一步加速。"),
+    ], sz=22, gap=12,
         note="另：三因子模型的「替代道路密度」以 34 公尺的路段計數，真實路網上幾乎都滿分；"
-             "可改成計算不同道路的條數（蘇花約 10 條、台北上千條）。")
+             "可改成計算不同道路的條數（蘇花約 10 條、台北上千條）。"
+             "封路重疊：原本的事件增量方法在封路之後再套用附近事件時，會把封閉路段改成以 3 km/h 可通行，"
+             "且封路會覆寫該路段已累積的風險；全量重算時順序固定，結果正確。"
+             "實測 1,000 個事件（含 16 處封路）：544 條路段與全量重算不同（封閉路段被改成可通行），全量重算後恢復正確。")
 
 
 REFS = [
@@ -1349,6 +1505,7 @@ REFS = [
         "高公局 TDCS M05A、ETag：訓練、即時預測與事故回堵資料。",
     ]),
     ("事件傳播與路網", [
+        "Page, L., Brin, S., Motwani, R., & Winograd, T. (1998). The PageRank Citation Ranking.",
         "Andersen, R., Chung, F., & Lang, K. (2006). Local Graph Partitioning "
         "using PageRank Vectors. FOCS. 殘差推送。",
         "Jenelius, E., et al. (2006). Importance and Exposure in Road Network Vulnerability.",
@@ -1400,10 +1557,11 @@ def build():
     d = WispDeck()
     chapters = [
         [s_motivation, s_objective, s_vs_gps, s_example],
-        [s_arch_diagram, s_layers, s_search, s_event_life, s_local_update, s_linear],
-        [s_queue_idea, s_two_places, s_this_accident, s_push, s_verify],
+        [s_arch_diagram, s_layers, s_search, s_event_life, s_local_update, s_linear, s_burst],
+        [s_queue_idea, s_two_places, s_this_accident, s_graph_terms, s_push, s_pagerank,
+         s_dep_index, s_verify],
         [s_shape_points, s_cut_rule, s_contraction, s_link_sync, s_performance],
-        [s_predict_idea, s_pred_data, s_pred_model, s_pred_train, s_pred_result,
+        [s_predict_idea, s_pred_data, s_pred_model, s_gcn_compute, s_pred_train, s_pred_result,
          s_pred_accuracy, s_predict_pipeline, s_pred_live, s_pred_update, s_pred_update_result,
          s_pred_anomaly, s_pred_calib],
         [s_video, s_event_compare, s_recap],
